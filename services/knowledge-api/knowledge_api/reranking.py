@@ -91,7 +91,13 @@ def required_query_anchors(query: str) -> set[str]:
 
     anchors = extract_anchors(query)
     identifiers = {anchor for anchor in anchors if re.search(r"[a-z]", anchor, re.IGNORECASE)}
-    if re.search(r"司龄|工龄|年龄|满\s*\d|不满\s*\d|不足\s*\d|超过\s*\d|以内|以上|以下|档位|区间", query):
+    range_or_input_condition = re.search(
+        r"司龄|工龄|年龄|入职\s*(?:半|\d)|工作\s*(?:半|\d)|满\s*\d|不满\s*\d|不足\s*\d|"
+        r"超过\s*\d|以内|以上|以下|档位|区间|怎么处理|如何处理|如何处罚|什么后果|"
+        r"能不能报|能否报|可以报|可否报|能不能住|差多少|相差多少",
+        query,
+    )
+    if range_or_input_condition:
         return identifiers
     return anchors
 
@@ -102,6 +108,10 @@ _SEMANTIC_ALIASES = (
     ("几天内", "工作日内"),
     ("几天", "工作日"),
     ("有没有", "是否"),
+    ("发工资", "工资发放 发薪日"),
+    ("工资哪天发", "工资发放日期 发薪日"),
+    ("虚假报销", "虚假发票 重复报销 违规报销"),
+    ("差多少", "差额 标准"),
 )
 
 

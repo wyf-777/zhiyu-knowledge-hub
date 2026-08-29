@@ -1,0 +1,117 @@
+{
+  "version": "zhiyu-experience-regression-v2",
+  "provenance": {
+    "type": "local-user-feedback",
+    "contains_document_content": false,
+    "recorded_at": "2026-08-29",
+    "note": "仅保存脱敏问题、期望关键词和来源文件名，不包含用户文档正文。"
+  },
+  "knowledge_base_id": "enterprise",
+  "default_constraints": {
+    "citation_required": true,
+    "max_answer_chars": 700,
+    "prohibited_patterns": ["|---|", "当前尚未启用大模型归纳"]
+  },
+  "cases": [
+    {
+      "id": "salary-date-paraphrase",
+      "query": "工资哪天发？",
+      "expected_terms": ["每月15日", "节假日", "最近一个工作日"],
+      "expected_sources": ["04-薪酬福利管理制度.md", "01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "salary-date-alternate-phrasing",
+      "query": "什么时候发工资？",
+      "expected_terms": ["每月15日", "最近工作日"],
+      "expected_sources": ["01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "complete-new-first-tier-city-list",
+      "query": "新一线城市是哪16座？",
+      "expected_count": 16,
+      "expected_terms": ["杭州", "成都", "苏州", "南京", "武汉", "西安", "天津", "重庆", "郑州", "长沙", "青岛", "宁波", "东莞", "合肥", "佛山", "沈阳"],
+      "prohibited_terms": ["等城市", "等等"],
+      "expected_sources": ["12-差旅标准一览表.xls", "05-差旅与报销管理办法.pdf"]
+    },
+    {
+      "id": "complete-new-first-tier-city-follow-up",
+      "history": [
+        {"role": "user", "content": "新一线城市有哪些？"},
+        {"role": "assistant", "content": "资料中列出了新一线城市。"}
+      ],
+      "query": "是哪16座？",
+      "expected_rewritten_query": "新一线城市是哪16座？",
+      "expected_count": 16,
+      "expected_terms": ["杭州", "成都", "苏州", "南京", "武汉", "西安", "天津", "重庆", "郑州", "长沙", "青岛", "宁波", "东莞", "合肥", "佛山", "沈阳"]
+    },
+    {
+      "id": "late-policy-pronoun-follow-up",
+      "history": [
+        {"role": "user", "content": "迟到20分钟怎么算？"},
+        {"role": "assistant", "content": "按考勤制度中的迟到档位处理。"}
+      ],
+      "query": "他是怎么规定这个迟到问题的？",
+      "expected_rewritten_query": "迟到问题是怎么规定的？",
+      "expected_terms": ["迟到"],
+      "expected_sources": ["02-考勤管理制度.docx", "13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "late-policy-complete-brackets",
+      "query": "那迟到是怎么规定的？",
+      "expected_rewritten_query": "迟到问题是怎么规定的？",
+      "expected_terms": ["迟到"],
+      "answer_requirement": "覆盖资料中的全部处罚档位，不只回答弹性打卡基准。",
+      "expected_sources": ["02-考勤管理制度.docx", "13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "half-year-annual-leave",
+      "query": "我入职半年，年假有几天？",
+      "expected_terms": ["0天", "连续工作满1年"],
+      "expected_sources": ["03-年假档位速查.md", "13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "manager-shenzhen-hotel-over-cap",
+      "query": "经理去深圳住酒店650元/晚能不能报？",
+      "expected_terms": ["一线城市", "经理", "600元", "50元", "分管副总"],
+      "prohibited_terms": ["可以全额报销", "P7-P8的650元标准"],
+      "expected_sources": ["12-差旅标准一览表.xls", "05-差旅与报销管理办法.pdf"]
+    },
+    {
+      "id": "false-expense-claim-threshold",
+      "query": "虚假报销6000元怎么处理？",
+      "expected_terms": ["追回全额", "记大过", "5000元", "解除劳动合同", "移送司法机关"],
+      "expected_sources": ["05-差旅与报销管理办法.pdf"]
+    },
+    {
+      "id": "communication-allowance-difference",
+      "query": "经理和总监通讯补贴差多少？",
+      "expected_terms": ["经理", "200元", "总监", "400元", "相差200元"],
+      "expected_sources": ["14-职级补贴与组织通讯录.xls"]
+    },
+    {
+      "id": "intern-core-repository-access",
+      "query": "我是实习生，我可以看核心代码仓库吗？",
+      "expected_terms": ["不能", "rd-core", "研发正式员工", "实习"],
+      "answer_requirement": "区分代码仓库权限与生产环境权限。",
+      "expected_sources": ["06-信息安全与保密制度.pdf"]
+    },
+    {
+      "id": "hangzhou-headquarters-work-time-no-regression",
+      "query": "杭州总部上班时间？",
+      "expected_terms": ["9:00", "18:00", "12:00", "13:00"],
+      "expected_sources": ["13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "private-usb-policy-no-regression",
+      "query": "私人U盘能拷文件吗？",
+      "expected_terms": ["禁止", "加密U盘", "XC-USB"],
+      "expected_sources": ["06-信息安全与保密制度.pdf"]
+    },
+    {
+      "id": "annual-leave-six-years-no-regression",
+      "query": "司龄6年的年假有几天？",
+      "expected_terms": ["10天", "满5年", "不满10年"],
+      "expected_sources": ["03-年假档位速查.md", "13-假期与考勤扣款标准.xls"]
+    }
+  ]
+}

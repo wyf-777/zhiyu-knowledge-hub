@@ -83,7 +83,55 @@ async def test_short_follow_up_uses_fast_deterministic_retrieval_query(tmp_path)
         [{"role": "user", "content": "上海普通员工的住宿上限是多少？"}],
     )
 
-    assert rewritten == "上海普通员工的住宿上限是多少？\n追问：那部门负责人呢？"
+    assert rewritten == "上海部门负责人的住宿上限是多少？"
+
+
+@pytest.mark.anyio
+async def test_pronoun_follow_up_is_rewritten_to_explicit_topic_without_model(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("明确的短追问不应额外调用大模型")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    rewritten = await manager.rewrite_query(
+        "他是怎么规定这个迟到问题的？",
+        [
+            {"role": "user", "content": "迟到20分钟怎么算？"},
+            {"role": "assistant", "content": "迟到20分钟按一次迟到处理。"},
+        ],
+    )
+
+    assert rewritten == "迟到问题是怎么规定的？"
+
+
+@pytest.mark.anyio
+async def test_count_follow_up_inherits_previous_list_topic_without_model(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("明确的短追问不应额外调用大模型")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    rewritten = await manager.rewrite_query(
+        "是哪16座？",
+        [{"role": "user", "content": "新一线城市有哪些？"}],
+    )
+
+    assert rewritten == "新一线城市是哪16座？"
+
+
+@pytest.mark.anyio
+async def test_direct_topic_follow_up_does_not_get_polluted_by_previous_question(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("主题已经明确的短追问不应额外调用大模型")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    rewritten = await manager.rewrite_query(
+        "那迟到是怎么规定的？",
+        [
+            {"role": "user", "content": "迟到20分钟怎么算？"},
+            {"role": "assistant", "content": "按考勤制度处理。"},
+        ],
+    )
+
+    assert rewritten == "迟到问题是怎么规定的？"
 
 
 @pytest.mark.anyio
@@ -178,3 +226,62 @@ async def test_complete_list_question_forbids_omitting_items(tmp_path) -> None:
 
     system_prompt = payloads[0]["messages"][0]["content"]
     assert "禁止用‘等’‘等等’省略" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_invalid_stream_gets_one_short_grounded_retry(tmp_path) -> None:
+    payloads: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        if payload["stream"]:
+            body = json.dumps({"message": {"content": "这是一段没有引用且无法验证的回答。"}, "done": True}, ensure_ascii=False) + "\n"
+            return httpx.Response(200, content=body.encode("utf-8"))
+        return httpx.Response(200, json={"message": {"content": "工资在每月15日发放。 [[1]]"}})
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    answer = await manager.stream(
+        "薪酬制度的发放要求是什么？",
+        [{
+            "chunk_id": "chunk-1", "document_id": "document-1", "document_name": "薪酬制度.txt",
+            "format": "TXT", "page": 1, "heading": "工资发放", "content": "工资在每月15日发放。",
+            "score": 0.9, "evidence_score": 0.9, "updated_at": "2026-08-29T00:00:00Z",
+        }],
+    )
+    content = "".join([delta async for delta in answer.deltas])
+
+    assert content == "工资在每月15日发放。 [[1]]"
+    assert len(payloads) == 2
+    assert payloads[1]["stream"] is False
+    assert payloads[1]["options"]["num_predict"] <= 240
+
+
+@pytest.mark.anyio
+async def test_model_request_failure_falls_back_without_slow_second_attempt(tmp_path) -> None:
+    answer_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal answer_calls
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        answer_calls += 1
+        return httpx.Response(503, json={"error": "service unavailable"})
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    answer = await manager.stream(
+        "薪酬制度的发放要求是什么？",
+        [{
+            "chunk_id": "chunk-1", "document_id": "document-1", "document_name": "薪酬制度.txt",
+            "format": "TXT", "page": 1, "heading": "工资发放", "content": "工资在每月15日发放。",
+            "score": 0.9, "evidence_score": 0.9, "updated_at": "2026-08-29T00:00:00Z",
+        }],
+    )
+    content = "".join([delta async for delta in answer.deltas])
+
+    assert answer_calls == 1
+    assert "15日" in content
+    assert "尚未启用大模型" not in content
+    assert "未加入资料之外的推测" in content

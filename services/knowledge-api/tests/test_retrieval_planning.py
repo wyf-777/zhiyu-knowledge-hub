@@ -30,3 +30,27 @@ def test_no_evidence_suggestions_are_clickable_questions_not_ui_templates() -> N
     assert suggestions
     assert "换一种方式提问" not in suggestions
     assert "查看已上传文档" not in suggestions
+
+
+def test_salary_date_paraphrase_adds_policy_vocabulary() -> None:
+    queries = build_retrieval_queries("工资哪天发？")
+
+    assert any("发薪日" in query and "工资发放日期" in query for query in queries)
+
+
+def test_half_year_leave_question_adds_eligibility_bracket_vocabulary() -> None:
+    queries = build_retrieval_queries("我入职半年，年假有几天？")
+
+    assert any("连续工作满1年" in query and "年假" in query for query in queries)
+
+
+def test_false_expense_claim_adds_violation_synonyms() -> None:
+    queries = build_retrieval_queries("虚假报销6000元怎么处理？")
+
+    assert any("虚假发票" in query and "重复报销" in query for query in queries)
+
+
+def test_allowance_difference_adds_standard_and_difference_terms() -> None:
+    queries = build_retrieval_queries("经理和总监通讯补贴差多少？")
+
+    assert any("补贴标准" in query and "差额" in query for query in queries)

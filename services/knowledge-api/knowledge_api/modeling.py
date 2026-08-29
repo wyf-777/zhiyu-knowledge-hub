@@ -77,6 +77,52 @@ def _needs_query_rewrite(question: str, history: list[dict[str, str]]) -> bool:
     return len(normalized) <= 48 or normalized.startswith(followup_markers) or normalized.endswith("呢")
 
 
+def _previous_question_topic(question: str) -> str:
+    topic = re.sub(r"[？?。！!]", "", question).strip()
+    topic = re.sub(
+        r"(?:有哪(?:些|几)(?:座|个|项)?|是哪(?:些|个)?|有哪些|是什么|怎么规定|如何规定|多少|几(?:天|个|年|次)?)$",
+        "",
+        topic,
+    ).strip(" ，,的")
+    return topic
+
+
+def _deterministic_followup_query(question: str, history: list[dict[str, str]]) -> str | None:
+    normalized = re.sub(r"\s+", "", question).strip()
+    last_user = next(
+        (str(item.get("content") or "").strip() for item in reversed(history) if item.get("role") == "user" and item.get("content")),
+        "",
+    )
+
+    direct_topic = re.fullmatch(r"(?:那)?(?P<topic>[\u3400-\u9fffA-Za-z0-9_-]{1,20}?)(?:问题)?(?:是)?(?:怎么|如何)规定的?[？?]?", normalized)
+    if direct_topic and direct_topic.group("topic") not in {"他", "它", "这个", "该", "上述"}:
+        return f"{direct_topic.group('topic').removesuffix('问题')}问题是怎么规定的？"
+
+    explicit_topic = re.search(r"这个(?P<topic>[\u3400-\u9fffA-Za-z0-9_-]{1,20}?)(?:问题)?(?:是|的|怎|如|[？?])", normalized)
+    if explicit_topic and re.search(r"规定|处理|计算|认定", normalized):
+        topic = explicit_topic.group("topic").removesuffix("问题")
+        predicate = "怎么规定" if "规定" in normalized else "怎么处理" if "处理" in normalized else "怎么认定"
+        return f"{topic}问题是{predicate}的？"
+
+    count_followup = re.fullmatch(r"(?:是)?哪(?P<count>\d+)(?P<unit>座|个|项|条|家)[？?]?", normalized)
+    if count_followup and last_user:
+        topic = _previous_question_topic(last_user)
+        if topic:
+            return f"{topic}是哪{count_followup.group('count')}{count_followup.group('unit')}？"
+
+    replacement_match = re.fullmatch(r"那(?P<subject>.+?)(?:呢|怎么样|如何)?[？?]?", normalized)
+    if replacement_match and last_user:
+        replacement = replacement_match.group("subject").strip("的")
+        roles = (
+            "试用期员工", "部门负责人", "普通员工", "正式员工", "外包人员",
+            "负责人", "实习生", "总监", "经理", "员工",
+        )
+        for role in roles:
+            if role in last_user and role != replacement:
+                return last_user.replace(role, replacement, 1)
+    return None
+
+
 async def _chunked_text(content: str, size: int = 24) -> AsyncIterator[str]:
     for start in range(0, len(content), size):
         yield content[start:start + size]
@@ -213,7 +259,7 @@ class ModelManager:
         # question is both reliable for hybrid retrieval and avoids a full 8B
         # model call before the user can see the first answer token.
         if len(re.sub(r"\s+", "", question)) <= 24:
-            return deterministic_fallback
+            return _deterministic_followup_query(question, history) or deterministic_fallback
         settings = self.get_settings()
         status = await self.status()
         if status.state != "ready":
@@ -272,10 +318,17 @@ class ModelManager:
         answer_requirements: list[str] = []
         if re.search(r"所有|全部|完整|逐一|罗列|列出|哪些", question):
             answer_requirements.append("完整列出资料中所有匹配项，禁止用‘等’‘等等’省略；若资料本身不完整，明确指出缺口。")
+        if re.search(r"怎么规定|如何规定|有哪些规定|完整规则", question):
+            answer_requirements.append("这是规则总览问题，应覆盖资料中的全部条件档位、累计规则和直接后果，不能只回答其中一个示例。")
         if len([item for item in re.split(r"[？?；;]+", question) if item.strip()]) > 1:
             answer_requirements.append("按当前问题的每个子问题逐项回答，不能只回答其中一项。")
         if re.search(r"能否|可否|可以|能不能|可不可以|是否|有没有|有无|吗[？?]?$", question):
             answer_requirements.append("先直接给出允许、禁止、可以或不可以的结论，再说明条件、例外和相关后果。")
+        if re.search(r"差多少|相差|超过|不足|以内|以上|以下|能不能报|能否报|可以报|有几天", question):
+            answer_requirements.append(
+                "先把用户给出的金额、年限、城市、职级等条件与资料中的同一表格行或阈值逐项绑定，再做比较或计算；"
+                "不得把其他城市、其他职级或相邻行的数字混入答案。"
+            )
         requirement_text = "".join(answer_requirements)
         system_prompt = (
             "你是知域本地知识库助手。只能依据给出的本地资料回答，不得使用常识补全或猜测。"
@@ -330,9 +383,10 @@ class ModelManager:
 
         system_prompt, user_prompt = self._answer_prompts(question, evidence, history)
         provider = "ollama" if settings.provider == "auto" else settings.provider
+        valid_markers = {f"[[{index}]]" for index in range(1, len(fallback.citations) + 1)}
+        generation_state = {"failed": False}
 
         async def ollama_deltas() -> AsyncIterator[str]:
-            emitted = False
             use_cpu = self._force_cpu
             while True:
                 options: dict[str, object] = {"temperature": 0.1, "num_predict": _prediction_budget(question), "num_ctx": 4096}
@@ -370,18 +424,13 @@ class ModelManager:
                                 event = json.loads(line)
                                 delta = str(event.get("message", {}).get("content", ""))
                                 if delta:
-                                    emitted = True
                                     yield delta
                     break
                 except (httpx.HTTPError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-                    if emitted:
-                        raise
-                    async for delta in _chunked_text(fallback.content):
-                        yield delta
-                    break
+                    generation_state["failed"] = True
+                    return
 
         async def openai_deltas() -> AsyncIterator[str]:
-            emitted = False
             try:
                 async with self._client(float(settings.timeout_seconds)) as client:
                     async with client.stream(
@@ -408,18 +457,67 @@ class ModelManager:
                             event = json.loads(payload)
                             delta = str(event.get("choices", [{}])[0].get("delta", {}).get("content") or "")
                             if delta:
-                                emitted = True
                                 yield delta
             except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError):
-                if emitted:
-                    raise
-                async for delta in _chunked_text(fallback.content):
-                    yield delta
+                generation_state["failed"] = True
+                return
+
+        async def retry_invalid_answer(reason: str) -> str | None:
+            retry_system = (
+                system_prompt
+                + "上一版回答未通过本地校验。请重新生成一个更短的最终答案：先给结论，最多三句话，"
+                "每句话都必须带有效引用；不要输出标题、表格、原文块或解释校验过程。"
+            )
+            retry_user = f"{user_prompt}\n\n失败原因：{reason}。请只输出修正后的最终答案。"
+            try:
+                async with self._client(min(float(settings.timeout_seconds), 45.0)) as client:
+                    if provider == "ollama":
+                        options: dict[str, object] = {"temperature": 0, "num_predict": min(240, _prediction_budget(question)), "num_ctx": 4096}
+                        if self._force_cpu:
+                            options["num_gpu"] = 0
+                        response = await client.post(
+                            f"{settings.base_url}/api/chat",
+                            json={
+                                "model": settings.model,
+                                "stream": False,
+                                "think": False,
+                                "keep_alive": "15m",
+                                "messages": [
+                                    {"role": "system", "content": retry_system},
+                                    {"role": "user", "content": retry_user},
+                                ],
+                                "options": options,
+                            },
+                        )
+                        response.raise_for_status()
+                        content = str(response.json().get("message", {}).get("content", "")).strip()
+                    else:
+                        response = await client.post(
+                            f"{settings.base_url}/v1/chat/completions",
+                            json={
+                                "model": settings.model,
+                                "stream": False,
+                                "temperature": 0,
+                                "max_tokens": min(240, _prediction_budget(question)),
+                                "messages": [
+                                    {"role": "system", "content": retry_system},
+                                    {"role": "user", "content": retry_user},
+                                ],
+                            },
+                        )
+                        response.raise_for_status()
+                        content = str(response.json()["choices"][0]["message"]["content"]).strip()
+            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError):
+                return None
+            markers = set(re.findall(r"\[\[\d+]]", content))
+            context_dump = content.lstrip().startswith(("#", "---", "|")) or content.count("|") >= 8
+            if not content or context_dump or not markers or not markers <= valid_markers:
+                return None
+            return content
 
         async def validated_deltas(source: AsyncIterator[str]) -> AsyncIterator[str]:
             buffer = ""
             released = False
-            valid_markers = {f"[[{index}]]" for index in range(1, len(fallback.citations) + 1)}
             async for delta in source:
                 if released:
                     yield delta
@@ -431,7 +529,21 @@ class ModelManager:
                     or buffer.count("|") >= 8
                     or buffer.count("\n---") >= 2
                 )
-                if context_dump or len(buffer) > 240:
+                if context_dump:
+                    repaired = await retry_invalid_answer("回答包含原始表格或文档转储")
+                    if repaired:
+                        async for repaired_delta in _chunked_text(repaired):
+                            yield repaired_delta
+                        return
+                    async for fallback_delta in _chunked_text(fallback.content):
+                        yield fallback_delta
+                    return
+                if len(buffer) > max(720, _prediction_budget(question) * 3):
+                    repaired = await retry_invalid_answer("回答过长且没有及时提供有效引用")
+                    if repaired:
+                        async for repaired_delta in _chunked_text(repaired):
+                            yield repaired_delta
+                        return
                     async for fallback_delta in _chunked_text(fallback.content):
                         yield fallback_delta
                     return
@@ -445,6 +557,15 @@ class ModelManager:
             markers = set(re.findall(r"\[\[\d+]]", buffer))
             if buffer.strip() and markers and markers <= valid_markers:
                 yield buffer
+                return
+            if generation_state["failed"] and not buffer.strip():
+                async for fallback_delta in _chunked_text(fallback.content):
+                    yield fallback_delta
+                return
+            repaired = await retry_invalid_answer("回答缺少有效引用或未完整生成")
+            if repaired:
+                async for repaired_delta in _chunked_text(repaired):
+                    yield repaired_delta
                 return
             async for fallback_delta in _chunked_text(fallback.content):
                 yield fallback_delta

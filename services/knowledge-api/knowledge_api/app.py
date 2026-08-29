@@ -352,7 +352,10 @@ def create_app(
         retrieval_query = await model_manager.rewrite_query(payload.message.strip(), history)
         retrieval_queries = build_retrieval_queries(retrieval_query)
         search_results = await run_in_threadpool(processor.search_many, retrieval_queries, payload.knowledge_base_ids, 12, payload.document_ids)
-        answer = await model_manager.stream(payload.message.strip(), search_results, history)
+        # Use the standalone question for both retrieval and answer grounding.
+        # Otherwise a follow-up such as “是哪16座” retrieves the right table but
+        # the compressor cannot know which list inside that table must be kept.
+        answer = await model_manager.stream(retrieval_query, search_results, history)
         message_id = str(uuid4())
 
         def event(name: str, **data: object) -> bytes:

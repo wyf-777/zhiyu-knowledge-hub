@@ -64,4 +64,7 @@ def test_error_code_anchor_keeps_word_boundaries_between_heading_and_content() -
 
 def test_range_lookup_does_not_require_input_value_as_literal_anchor() -> None:
     assert required_query_anchors("司龄6年的年假有几天？") == set()
+    assert required_query_anchors("我入职半年，年假有几天？") == set()
+    assert required_query_anchors("虚假报销6000元怎么处理？") == set()
+    assert required_query_anchors("经理去深圳住酒店650元/晚能不能报？") == set()
     assert required_query_anchors("设备编号 ZY-7788 的保留期？") == {"zy-7788"}

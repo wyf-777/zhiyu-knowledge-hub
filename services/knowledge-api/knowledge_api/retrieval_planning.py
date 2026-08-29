@@ -18,6 +18,12 @@ _QUERY_ALIASES = (
     ("补偿", "经济补偿"),
     ("找谁开通", "开通联系人 负责部门 联系方式"),
     ("电脑配置", "电脑配置标准 显示器"),
+    ("发工资", "工资发放日期 发薪日 每月几号"),
+    ("工资哪天发", "工资发放日期 发薪日 每月几号"),
+    ("什么时候发工资", "工资发放日期 发薪日 每月几号"),
+    ("入职半年", "入职未满1年 连续工作满1年 年假 享受条件"),
+    ("虚假报销", "虚假报销 虚假发票 重复报销 拆票 私人消费冒充公务 处理"),
+    ("通讯补贴", "通讯补贴 补贴标准 职级 差额"),
 )
 
 
@@ -70,7 +76,7 @@ def build_retrieval_queries(question: str) -> list[str]:
         if subject:
             _append_unique(queries, f"{subject} 是否允许 规定 条件 例外 禁止")
 
-    if re.search(r"司龄|工龄|年龄|满\s*\d|不满\s*\d|不足\s*\d|超过\s*\d|以内|以上|以下|档位|区间", original):
+    if re.search(r"司龄|工龄|年龄|入职\s*(?:半|\d)|工作\s*(?:半|\d)|满\s*\d|不满\s*\d|不足\s*\d|超过\s*\d|以内|以上|以下|档位|区间", original):
         range_query = _NUMERIC_RANGE_VALUE.sub(" ", original)
         range_query = re.sub(r"\d+(?:\.\d+)?", " ", range_query)
         _append_unique(queries, f"{range_query} 标准 档位 条件")

@@ -24,8 +24,279 @@ def select_evidence(question: str, search_results: list[dict[str, Any]]) -> list
     return [item for item in search_results if evidence_score(item) >= MIN_EVIDENCE_SCORE][:limit]
 
 
+def _evidence_units(item: dict[str, Any]) -> list[str]:
+    text = str(item.get("parent_content") or item.get("content") or "")
+    units: list[str] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"^#{1,6}\s*", "", raw_line.strip())
+        if not line or re.fullmatch(r"\|?(?:\s*:?-{3,}:?\s*\|)+", line):
+            continue
+        if "|" in line:
+            line = " / ".join(cell.strip() for cell in line.strip("|").split("|") if cell.strip())
+        units.extend(
+            sentence.strip(" -*")
+            for sentence in re.split(r"(?<=[。！？；!?;])\s*", line)
+            if sentence.strip(" -*")
+        )
+    return units
+
+
+def _evidence_table_rows(item: dict[str, Any]) -> list[list[str]]:
+    text = str(item.get("parent_content") or item.get("content") or "")
+    rows: list[list[str]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if "|" not in line or re.fullmatch(r"\|?(?:\s*:?-{3,}:?\s*\|)+", line):
+            continue
+        cells = [re.sub(r"\s+", " ", cell).strip() for cell in line.strip("|").split("|")]
+        if len(cells) >= 2 and any(cells):
+            rows.append(cells)
+    return rows
+
+
+def _salary_date_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    if not re.search(r"工资.*(?:哪天|几号|什么时候).*发|(?:哪天|几号|什么时候).*发工资|发薪日|工资发放日", question):
+        return None
+    for index, item in enumerate(evidence, start=1):
+        units = _evidence_units(item)
+        for position, unit in enumerate(units):
+            match = re.search(r"每月\s*(\d{1,2})\s*[日号]", unit)
+            if not match or not re.search(r"工资|薪资|薪酬|发薪", unit):
+                continue
+            answer = f"工资发放日为每月 **{match.group(1)} 日**"
+            nearby = "".join(units[position:position + 2])
+            exception = re.search(r"(?:遇|如遇)[^。；]*(?:节假日|公休日)[^。；]*(?:提前|顺延)[^。；]*(?:工作日)[^。；]*", nearby)
+            if exception:
+                answer += f"；{exception.group(0).rstrip('。；')}"
+            return f"{answer}。 [[{index}]]"
+    return None
+
+
+def _tenure_years(question: str) -> tuple[float, str] | None:
+    if "半年" in question:
+        return 0.5, "半年"
+    month = re.search(r"(?:入职|工作)\s*(\d+(?:\.\d+)?)\s*个?月", question)
+    if month:
+        return float(month.group(1)) / 12, f"{month.group(1)}个月"
+    year = re.search(r"(?:入职|工作|司龄|工龄)\s*(\d+(?:\.\d+)?)\s*年", question)
+    if year:
+        return float(year.group(1)), f"{year.group(1)}年"
+    return None
+
+
+def _eligibility_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    tenure = _tenure_years(question)
+    if not tenure or not re.search(r"年假|年休假", question):
+        return None
+    years, label = tenure
+    for index, item in enumerate(evidence, start=1):
+        for unit in _evidence_units(item):
+            threshold = re.search(r"(?:连续工作|工作|入职)?\s*满\s*(\d+(?:\.\d+)?)\s*年[^。；]*(?:开始|方可|才可|享受)[^。；]*(?:年假|年休假)|(?:年假|年休假)[^。；]*(?:连续工作|工作|入职)?\s*满\s*(\d+(?:\.\d+)?)\s*年", unit)
+            if not threshold:
+                continue
+            minimum = float(threshold.group(1) or threshold.group(2))
+            if years < minimum:
+                minimum_label = f"{minimum:g}年"
+                return f"你目前入职 **{label}**，尚未达到“连续工作满 {minimum_label}”的年假享受条件，因此当前年假为 **0 天**。 [[{index}]]"
+    return None
+
+
+def _difference_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    match = re.search(r"(?P<left>[\u3400-\u9fffA-Za-z0-9-]{1,8})和(?P<right>[\u3400-\u9fffA-Za-z0-9-]{1,8}?)(?P<metric>通讯补贴|交通补贴|餐费补贴|住房补贴|补贴)(?:相差|差)多少", question)
+    if not match:
+        return None
+    left, right, metric = match.group("left"), match.group("right"), match.group("metric")
+    found: dict[str, tuple[float, int]] = {}
+    for index, item in enumerate(evidence, start=1):
+        rows = _evidence_table_rows(item)
+        for header in rows:
+            left_column = next((column for column, cell in enumerate(header) if left in cell), None)
+            right_column = next((column for column, cell in enumerate(header) if right in cell), None)
+            if left_column is None or right_column is None:
+                continue
+            for row in rows:
+                if not any(metric in cell or (metric == "补贴" and "补贴" in cell) for cell in row):
+                    continue
+                if max(left_column, right_column) >= len(row):
+                    continue
+                left_amount = re.search(r"(\d+(?:\.\d+)?)", row[left_column])
+                right_amount = re.search(r"(\d+(?:\.\d+)?)", row[right_column])
+                if left_amount and right_amount:
+                    found[left] = (float(left_amount.group(1)), index)
+                    found[right] = (float(right_amount.group(1)), index)
+                    break
+        metric_column = next(
+            (column for row in rows for column, cell in enumerate(row) if metric in cell or (metric == "补贴" and "补贴" in cell)),
+            None,
+        )
+        if metric_column is not None:
+            for row in rows:
+                if metric_column >= len(row):
+                    continue
+                amount = re.search(r"(\d+(?:\.\d+)?)", row[metric_column])
+                if not amount:
+                    continue
+                for role in (left, right):
+                    if any(role in cell for cell in row) and role not in found:
+                        found[role] = (float(amount.group(1)), index)
+        for unit in _evidence_units(item):
+            if metric not in unit:
+                continue
+            for role in (left, right):
+                role_amount = re.search(rf"{re.escape(role)}[^。；]*?(\d+(?:\.\d+)?)\s*元", unit)
+                if role_amount and role not in found:
+                    found[role] = (float(role_amount.group(1)), index)
+    if left not in found or right not in found:
+        return None
+    left_value, left_index = found[left]
+    right_value, right_index = found[right]
+    difference = abs(right_value - left_value)
+    markers = f"[[{left_index}]]" if left_index == right_index else f"[[{left_index}]] [[{right_index}]]"
+    return f"{left}的{metric}为 **{left_value:g} 元**，{right}为 **{right_value:g} 元**，两者相差 **{difference:g} 元**。 {markers}"
+
+
+def _threshold_consequence_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    amount_match = re.search(r"(\d+(?:\.\d+)?)\s*元", question)
+    if not amount_match or not re.search(r"怎么处理|如何处理|如何处罚|怎么处罚|什么后果", question):
+        return None
+    amount = float(amount_match.group(1))
+    subject = re.sub(r"\d+(?:\.\d+)?\s*元|怎么处理|如何处理|如何处罚|怎么处罚|什么后果|[？?，,。]", "", question).strip()
+    subject_features = {
+        run[position:position + 2]
+        for run in re.findall(r"[\u3400-\u9fff]{2,}", subject)
+        for position in range(max(1, len(run) - 1))
+    }
+    for index, item in enumerate(evidence, start=1):
+        continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+        for threshold_match in re.finditer(r"(?:金额)?超过(\d+(?:\.\d+)?)元", continuous):
+            threshold = float(threshold_match.group(1))
+            if amount <= threshold:
+                continue
+            window = continuous[max(0, threshold_match.start() - 140):threshold_match.end() + 140]
+            if subject_features and not any(feature in window for feature in subject_features):
+                continue
+            consequences = [phrase for phrase in ("追回全额", "记大过", "解除劳动合同", "移送司法机关") if phrase in window]
+            if consequences:
+                return f"该金额为 **{amount:g} 元**，已超过制度规定的 **{threshold:g} 元**阈值，应当{'、'.join(consequences)}。 [[{index}]]"
+        units = _evidence_units(item)
+        for position, unit in enumerate(units):
+            threshold_match = re.search(r"(?:金额)?\s*超过\s*(\d+(?:\.\d+)?)\s*元", unit)
+            if not threshold_match or amount <= float(threshold_match.group(1)):
+                continue
+            neighborhood = units[max(0, position - 2):position + 1]
+            joined = "".join(neighborhood)
+            if subject_features and not any(feature in joined for feature in subject_features):
+                continue
+            consequences: list[str] = []
+            for phrase in ("追回全额", "记大过", "解除劳动合同", "移送司法机关"):
+                if phrase in joined and phrase not in consequences:
+                    consequences.append(phrase)
+            if consequences:
+                threshold = float(threshold_match.group(1))
+                return f"该金额为 **{amount:g} 元**，已超过制度规定的 **{threshold:g} 元**阈值，应当{'、'.join(consequences)}。 [[{index}]]"
+    return None
+
+
+def _expense_cap_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    amount_match = re.search(r"(\d+(?:\.\d+)?)\s*元(?:\s*/\s*晚)?", question)
+    if not amount_match or not re.search(r"能不能报|能否报|可以报|可否报|能报吗", question):
+        return None
+    requested = float(amount_match.group(1))
+    indexed_units = [
+        (index, unit)
+        for index, item in enumerate(evidence, start=1)
+        for unit in _evidence_units(item)
+    ]
+    category: str | None = None
+    category_index: int | None = None
+    category_pattern = re.compile(r"(?:新一线|一线|二线及以下|二线|三线及以下|三线|其他)(?:城市)?")
+    for index, unit in indexed_units:
+        category_match = category_pattern.search(unit)
+        if not category_match:
+            continue
+        cells = [cell.strip() for cell in re.split(r"[/、，,；;]", unit) if cell.strip()]
+        if any(len(cell) >= 2 and cell in question for cell in cells if cell not in {"一线", "新一线", "二线", "二线及以下"}):
+            category = category_match.group(0)
+            category_index = index
+            break
+
+    roles = (
+        "试用期员工", "部门负责人", "普通员工", "正式员工", "实习生", "外包人员",
+        "董事长", "副总经理", "总经理", "总监", "经理", "主管", "员工",
+    )
+    role = next((item for item in roles if item in question), None)
+    if not category or not role:
+        return None
+
+    cap: float | None = None
+    cap_index: int | None = None
+    for index, unit in indexed_units:
+        amounts = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)\s*元", unit)]
+        if category in unit and role in unit and amounts:
+            cap = amounts[0]
+            cap_index = index
+            break
+    if cap is None:
+        for index, item in enumerate(evidence, start=1):
+            rows = _evidence_table_rows(item)
+            for header in rows:
+                role_column = next((column for column, cell in enumerate(header) if role in cell), None)
+                if role_column is None:
+                    continue
+                for row in rows:
+                    if role_column >= len(row) or not any(city in question for city in re.findall(r"[\u3400-\u9fff]{2,}", "、".join(row))):
+                        continue
+                    amount = re.search(r"(\d+(?:\.\d+)?)", row[role_column])
+                    row_category = next((cell for cell in row if re.fullmatch(r"新一线|一线|二线及以下|二线|三线及以下|三线|其他", cell)), None)
+                    if amount and row_category:
+                        cap = float(amount.group(1))
+                        cap_index = index
+                        category = row_category
+                        category_index = index
+                        break
+                if cap is not None:
+                    break
+            if cap is not None:
+                break
+    if cap is None or cap_index is None:
+        return None
+
+    markers = {category_index, cap_index}
+    exception_text = ""
+    for index, unit in indexed_units:
+        if re.search(r"指定酒店|协议酒店|会议酒店", unit) and re.search(r"批准|审批|同意", unit):
+            exception_text = re.sub(r"^[^：:]{0,16}[：:]", "", unit).rstrip("。；")
+            markers.add(index)
+            break
+    if not exception_text:
+        for index, item in enumerate(evidence, start=1):
+            continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+            exception = re.search(r"(?:会议或客户|客户或会议)指定酒店超过标准的，?须在出差申请中注明并经分管副总(?:同意|批准)", continuous)
+            if exception:
+                exception_text = exception.group(0)
+                markers.add(index)
+                break
+    marker_text = " ".join(f"[[{index}]]" for index in sorted(item for item in markers if item is not None))
+    category_label = category if category.endswith("城市") else f"{category}城市"
+    if requested <= cap:
+        return f"可以。{role}在{category_label}的住宿上限为 **{cap:g} 元/晚**，本次 **{requested:g} 元/晚**未超标。 {marker_text}"
+    excess = requested - cap
+    answer = (
+        f"不能按 **{requested:g} 元/晚**全额报销。{role}在{category_label}的住宿上限为 **{cap:g} 元/晚**，"
+        f"超出的 **{excess:g} 元/晚**原则上需自行承担。"
+    )
+    if exception_text:
+        answer += f"例外是：{exception_text}。"
+    return f"{answer} {marker_text}"
+
+
 def fast_factual_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
-    """Answer narrow, high-confidence structured time lookups without an LLM."""
+    """Answer narrow, high-confidence structured lookups without an LLM."""
+
+    for resolver in (_salary_date_answer, _eligibility_answer, _difference_answer, _threshold_consequence_answer, _expense_cap_answer):
+        answer = resolver(question, evidence)
+        if answer:
+            return answer
 
     if not re.search(r"上班时间|工作时间|办公时间|几点上班|几点下班", question):
         return None
@@ -115,7 +386,7 @@ class ExtractiveAnswerProvider:
                     "score": evidence_score(item),
                 }
             )
-        answer_lines.extend(["", "以上内容直接来自本地知识库的检索结果。当前尚未启用大模型归纳，因此保留原文表述，避免添加资料中不存在的信息。"])
+        answer_lines.extend(["", "以上内容按本地知识库原文整理，未加入资料之外的推测。"])
         suggestions = [f"继续查看“{heading}”" for heading in headings[:2]]
         suggestions.extend(["概括这些资料的关键要点", "比较不同来源的相关内容"])
         return GroundedAnswer(
