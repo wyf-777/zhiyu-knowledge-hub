@@ -1,0 +1,65 @@
+{
+  "version": "zhiyu-experience-regression-v1",
+  "provenance": {
+    "type": "local-user-feedback",
+    "contains_document_content": false,
+    "recorded_at": "2026-08-29"
+  },
+  "knowledge_base_id": "enterprise",
+  "cases": [
+    {
+      "id": "hangzhou-headquarters-work-time",
+      "query": "杭州总部上班时间？",
+      "expected_terms": ["9:00", "18:00", "12:00", "13:00"],
+      "expected_sources": ["13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "complete-city-list",
+      "query": "新一线城市完整名单有哪些？",
+      "expected_terms": ["杭州", "成都"],
+      "expected_sources": ["12-差旅标准一览表.xls", "05-差旅与报销管理办法.pdf"]
+    },
+    {
+      "id": "travel-platform-multi-slot",
+      "query": "携程企业版找谁开通？分机多少？入职几天能开？",
+      "expected_terms": ["陈暮雪", "8066", "3个工作日"],
+      "expected_sources": ["12-差旅标准一览表.xls", "14-职级补贴与组织通讯录.xls"]
+    },
+    {
+      "id": "absence-termination-compensation",
+      "query": "连续旷工几天可以开除？有没有补偿？",
+      "expected_terms": ["3个工作日", "5个工作日", "经济补偿"],
+      "expected_sources": ["02-考勤管理制度.docx", "13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "private-usb-policy",
+      "query": "私人U盘能拷文件吗？",
+      "expected_terms": ["禁止", "加密U盘", "XC-USB"],
+      "expected_sources": ["06-信息安全与保密制度.pdf"]
+    },
+    {
+      "id": "developer-computer-standard",
+      "query": "研发新员工电脑配置标准？",
+      "expected_terms": ["i7", "16G", "512G", "27寸"],
+      "expected_sources": ["09-固定资产与办公用品管理规定.md"]
+    },
+    {
+      "id": "director-train-seat",
+      "query": "总监坐高铁可以坐一等座吗？",
+      "expected_terms": ["总监", "一等座"],
+      "expected_sources": ["12-差旅标准一览表.xls", "05-差旅与报销管理办法.pdf"]
+    },
+    {
+      "id": "annual-leave-bracket",
+      "query": "司龄6年的年假有几天？",
+      "expected_terms": ["10天", "满5年", "不满10年"],
+      "expected_sources": ["03-年假档位速查.md", "13-假期与考勤扣款标准.xls"]
+    },
+    {
+      "id": "company-registration-and-legal-representative",
+      "query": "公司注册地址和法定代表人是谁？",
+      "expected_terms": ["注册地址", "法定代表人", "周启明"],
+      "expected_sources": ["01-员工手册（2026修订版）.docx"]
+    }
+  ]
+}

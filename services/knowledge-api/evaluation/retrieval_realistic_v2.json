@@ -1,0 +1,63 @@
+{
+  "version": "zhiyu-retrieval-v2",
+  "provenance": {"type": "synthetic", "organization": "anonymous", "reviewed_at": ""},
+  "knowledge_base_id": "enterprise",
+  "documents": [
+    {
+      "name": "员工差旅管理制度2026.md",
+      "content": "# 适用范围\n本制度适用于因公离开常驻工作地的员工。出差申请应写明目的、地点、日期和预算，审批完成后方可订票。临时调整行程时应补充说明。\n\n# 交通标准\n普通员工乘坐高铁原则上选择二等座，部门负责人可选择一等座。确因项目紧急需要乘坐飞机的，应在出发前取得直属负责人批准。市内交通按照真实、合理、必要原则凭票报销。\n\n# 住宿标准\n上海、北京、深圳属于一类城市。普通员工住宿费上限为500元每晚，部门负责人住宿费上限为650元每晚。广州、杭州等二类城市普通员工上限为420元每晚。超出标准部分原则上由个人承担，因展会或重大活动导致价格异常的，应提前提交超标说明。\n\n# 报销时限\n员工应在出差结束后5个工作日内提交差旅报销申请，并附住宿发票、行程单和审批记录。跨月报销还应说明延迟原因。财务退回补正的，员工应在2个工作日内重新提交。\n\n# 取消与变更\n因个人原因产生的退票费不予报销；因公司安排变化产生的合理费用，凭变更通知和有效凭证报销。"
+    },
+    {
+      "name": "员工宿舍与住房补贴办法.md",
+      "content": "# 员工宿舍\n公司可为异地入职且符合条件的员工提供过渡宿舍。宿舍床位由行政部门统一安排，不得私自转租或长期占用公共区域。住宿人员应遵守消防和访客管理要求。\n\n# 住房补贴\n未入住公司宿舍的应届员工，在入职前12个月内可申请每月800元住房补贴。补贴随工资发放，需要提交租赁合同和居住证明。住房补贴不是贷款，公司不提供员工购房贷款或贷款额度。\n\n# 退出流程\n离职、调往常驻地或不再符合条件时，应在5个工作日内办理退宿并归还门禁卡。损坏公共设施的，按照实际维修费用承担责任。"
+    },
+    {
+      "name": "采购审批与供应商管理办法.md",
+      "content": "# 采购申请\n申请人应说明采购用途、数量、交付时间和预算科目。采购申请原则上应附至少三家供应商的有效报价；确属单一来源的，应提交书面说明。\n\n# 审批权限\n采购金额低于1万元由部门负责人审批；1万元以上且低于5万元需要财务负责人审批；达到或超过5万元需要总经理审批。不得通过拆分订单规避审批层级。\n\n# 供应商准入\n新供应商应提供营业执照、收款账户和必要资质。采购人员应核验主体一致性，并记录价格、交付和售后评价。\n\n# 验收付款\n到货后由申请部门和采购人员共同验收。合同约定分期付款的，必须按照验收节点提交付款申请，不得提前支付未满足条件的尾款。"
+    },
+    {
+      "name": "办公电脑配置与资产领用规范.md",
+      "content": "# 配置原则\n办公电脑按照岗位工作负载配置。普通办公岗位以内存16GB、固态硬盘512GB为基准，研发和设计岗位可根据软件需求提出更高配置。公司不强制指定电脑品牌，采购时应综合价格、保修和兼容性。\n\n# 资产领用\n员工领取电脑时应核对资产编号、配件和外观，并在资产系统确认。设备仅限工作使用，不得擅自出售、转借或拆卸。\n\n# 故障与更换\n设备故障应先提交服务台工单。确认无法维修或维修成本过高后，由信息部门出具更换意见，再进入采购审批流程。"
+    },
+    {
+      "name": "员工休假与考勤制度.md",
+      "content": "# 年假\n连续工作满1年不满10年的员工每年享有5天年假，满10年的员工每年享有10天年假。年假原则上在当年使用，确因工作安排无法使用的，按照公司统一通知处理。\n\n# 事假申请\n连续休假超过3天的，应至少提前3个工作日提交申请。遇到不可预见的紧急情况，应先通知直属负责人，并在返岗后补齐证明和审批。\n\n# 病假材料\n病假达到2个工作日时应提交正规医疗机构出具的诊断或就诊证明。材料只用于考勤审核，由授权人员查看。\n\n# 加班调休\n经事前审批的加班可按照制度安排调休。调休应在加班发生后3个月内申请，过期需要说明原因。"
+    },
+    {
+      "name": "信息系统错误代码处理手册.md",
+      "content": "# XZ-1000 网络不可达\n错误代码XZ-1000表示客户端无法连接本地服务。请确认服务进程、端口占用和防火墙规则，再重新检测连接。\n\n# XZ-1041 授权文件缺失\n错误代码XZ-1041表示授权文件不存在。请从管理员处获取与设备匹配的授权文件，并放入应用数据目录。\n\n# XZ-1042 授权已过期\n错误代码XZ-1042表示本地授权文件已经过期。请从管理员处获取新的授权文件，替换旧文件后重新启动本地服务。不要通过修改系统时间绕过授权校验。\n\n# XZ-1043 授权设备不匹配\n错误代码XZ-1043表示授权文件绑定的设备与当前设备不一致。请向管理员提交设备标识以重新签发，不要复制其他电脑的授权文件。\n\n# XZ-2001 索引损坏\n错误代码XZ-2001表示索引完整性检查失败。保留原始文档，进入设置中的检索与索引页面执行重建；重建期间仍可查看文档列表。"
+    },
+    {
+      "name": "项目交付与验收管理规范.md",
+      "content": "# 验收材料\n项目验收必须提交测试报告、部署清单、用户操作手册和遗留问题列表。涉及数据迁移的项目还应提交迁移校验记录。材料齐全后由项目负责人发起验收。\n\n# 验收角色\n业务负责人确认需求满足情况，技术负责人确认质量和部署条件，项目负责人汇总问题并组织验收会议。实施人员不得代替业务负责人作最终确认。\n\n# 遗留问题\n不影响核心流程的遗留问题可以附条件验收，但必须记录责任人、计划完成日期和复核方式。存在高风险安全问题时不得通过验收。\n\n# 归档要求\n验收通过后5个工作日内，将签字记录、最终版本文档和发布包归档到项目资料库。"
+    },
+    {
+      "name": "生产发布与回滚操作规程.md",
+      "content": "# 发布前检查\n发布申请应包含变更范围、测试结论、部署步骤、监控指标和回滚方案。生产发布前由技术负责人确认，重大变更还需业务负责人确认窗口。\n\n# 部署清单\n部署人员按照清单逐项执行并记录结果。清单包括服务版本、配置差异、数据库脚本和依赖组件，不得使用来源不明的临时文件。\n\n# 回滚条件\n出现核心接口持续失败、数据一致性异常或无法接受的性能下降时，应停止发布并执行回滚。回滚后保留日志和现场信息，再组织复盘。\n\n# 发布验收\n发布完成后的验证不等同于项目最终验收。发布人员只确认系统运行状态，业务交付仍按照项目验收规范执行。"
+    }
+  ],
+  "cases": [
+    {"id":"travel-hotel-staff","query":"普通员工去上海出差住宿每晚最高报销多少？","relevant_documents":["员工差旅管理制度2026.md"],"relevant_chunks":[{"document":"员工差旅管理制度2026.md","heading":"住宿标准"}],"answerable":true},
+    {"id":"travel-hotel-manager","query":"部门负责人在一类城市住宿上限是多少？","relevant_documents":["员工差旅管理制度2026.md"],"relevant_chunks":[{"document":"员工差旅管理制度2026.md","heading":"住宿标准"}],"answerable":true},
+    {"id":"travel-claim-time","query":"出差回来几天内要提交报销？","relevant_documents":["员工差旅管理制度2026.md"],"relevant_chunks":[{"document":"员工差旅管理制度2026.md","heading":"报销时限"}],"answerable":true},
+    {"id":"travel-correction","query":"差旅报销被财务退回后多久重新提交？","relevant_documents":["员工差旅管理制度2026.md"],"relevant_chunks":[{"document":"员工差旅管理制度2026.md","heading":"报销时限"}],"answerable":true},
+    {"id":"housing-subsidy","query":"应届员工没有住宿舍每月住房补贴多少钱？","relevant_documents":["员工宿舍与住房补贴办法.md"],"relevant_chunks":[{"document":"员工宿舍与住房补贴办法.md","heading":"住房补贴"}],"answerable":true},
+    {"id":"housing-no-loan","query":"公司是否提供员工购房贷款额度？","relevant_documents":["员工宿舍与住房补贴办法.md"],"relevant_chunks":[{"document":"员工宿舍与住房补贴办法.md","heading":"住房补贴"}],"answerable":true},
+    {"id":"purchase-quotes","query":"采购申请原则上要附几家供应商报价？","relevant_documents":["采购审批与供应商管理办法.md"],"relevant_chunks":[{"document":"采购审批与供应商管理办法.md","heading":"采购申请"}],"answerable":true},
+    {"id":"purchase-50k","query":"采购金额达到五万元由谁审批？","relevant_documents":["采购审批与供应商管理办法.md"],"relevant_chunks":[{"document":"采购审批与供应商管理办法.md","heading":"审批权限"}],"answerable":true},
+    {"id":"computer-brand","query":"办公电脑是否强制指定品牌？","relevant_documents":["办公电脑配置与资产领用规范.md"],"relevant_chunks":[{"document":"办公电脑配置与资产领用规范.md","heading":"配置原则"}],"answerable":true},
+    {"id":"leave-days","query":"工作满十年的员工有多少天年假？","relevant_documents":["员工休假与考勤制度.md"],"relevant_chunks":[{"document":"员工休假与考勤制度.md","heading":"年假"}],"answerable":true},
+    {"id":"leave-advance","query":"连续休假超过三天需要提前几个工作日申请？","relevant_documents":["员工休假与考勤制度.md"],"relevant_chunks":[{"document":"员工休假与考勤制度.md","heading":"事假申请"}],"answerable":true},
+    {"id":"sick-proof","query":"病假达到几天需要医疗证明？","relevant_documents":["员工休假与考勤制度.md"],"relevant_chunks":[{"document":"员工休假与考勤制度.md","heading":"病假材料"}],"answerable":true},
+    {"id":"error-1042","query":"XZ-1042 是什么问题，应该怎么处理？","relevant_documents":["信息系统错误代码处理手册.md"],"relevant_chunks":[{"document":"信息系统错误代码处理手册.md","heading":"XZ-1042 授权已过期"}],"answerable":true},
+    {"id":"error-1043","query":"设备不匹配对应哪个错误码？","relevant_documents":["信息系统错误代码处理手册.md"],"relevant_chunks":[{"document":"信息系统错误代码处理手册.md","heading":"XZ-1043 授权设备不匹配"}],"answerable":true},
+    {"id":"index-corrupt","query":"XZ-2001 出现后应该做什么？","relevant_documents":["信息系统错误代码处理手册.md"],"relevant_chunks":[{"document":"信息系统错误代码处理手册.md","heading":"XZ-2001 索引损坏"}],"answerable":true},
+    {"id":"acceptance-materials","query":"项目验收必须提交哪些材料？","relevant_documents":["项目交付与验收管理规范.md"],"relevant_chunks":[{"document":"项目交付与验收管理规范.md","heading":"验收材料"}],"answerable":true},
+    {"id":"acceptance-archive","query":"验收通过后多久归档？","relevant_documents":["项目交付与验收管理规范.md"],"relevant_chunks":[{"document":"项目交付与验收管理规范.md","heading":"归档要求"}],"answerable":true},
+    {"id":"release-vs-acceptance","query":"生产发布验证是不是项目最终验收？","relevant_documents":["生产发布与回滚操作规程.md"],"relevant_chunks":[{"document":"生产发布与回滚操作规程.md","heading":"发布验收"}],"answerable":true},
+    {"id":"no-canteen","query":"公司食堂今天午餐有哪些菜？","relevant_documents":[],"answerable":false},
+    {"id":"no-loan-amount","query":"员工购房贷款最高可以贷多少万元？","relevant_documents":["员工宿舍与住房补贴办法.md"],"relevant_chunks":[{"document":"员工宿舍与住房补贴办法.md","heading":"住房补贴"}],"answerable":true},
+    {"id":"no-flight-price","query":"飞往上海的机票当前价格是多少？","relevant_documents":[],"answerable":false},
+    {"id":"no-error-9999","query":"XZ-9999 错误代码表示什么？","relevant_documents":[],"answerable":false}
+  ]
+}

@@ -1,0 +1,52 @@
+name: cross-platform-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/knowledge-api/requirements-dev.txt
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Knowledge API dependencies
+        run: python -m pip install -r services/knowledge-api/requirements-dev.txt pyinstaller
+
+      - name: Verify frontend
+        run: npm run build
+
+      - name: Test Knowledge API
+        run: npm run api:test
+
+      - name: Enforce retrieval quality baseline
+        run: npm run api:eval:gate
+
+      - name: Build platform Sidecar
+        run: npm run sidecar:build
+
+      - name: Verify Tauri desktop shell
+        run: npm run desktop:check

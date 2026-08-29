@@ -1,0 +1,214 @@
+# API 设计规范
+
+## 1. 基本约定
+
+- API 前缀：`/api/v1`
+- 内容类型：`application/json; charset=utf-8`
+- 时间：ISO 8601 UTC
+- 主键：UUID 字符串
+- 分页：游标优先，管理列表可使用页码
+- 错误：稳定错误码、用户可读消息和关联 ID
+- 本地模式仍需认证，禁止无保护的环回 HTTP 服务
+
+## 2. 身份认证
+
+本地桌面壳启动 API 时生成短期随机令牌，通过受控启动通道传递。前端请求使用：
+
+```http
+Authorization: Bearer <ephemeral-token>
+```
+
+企业模式使用 OIDC/OAuth 2.0 或企业 SSO。密码、token、文档内容和问题不得放入 URL 查询参数。
+
+## 3. 错误格式
+
+```json
+{
+  "error": {
+    "code": "DOCUMENT_PARSE_FAILED",
+    "message": "文档解析失败，请检查文件是否损坏。",
+    "request_id": "req_...",
+    "details": {
+      "document_id": "..."
+    }
+  }
+}
+```
+
+`details` 不得包含密码、完整 token、模型密钥或未脱敏的敏感原文。
+
+## 4. 核心端点
+
+### 4.1 知识库
+
+```text
+GET    /api/v1/knowledge-bases
+POST   /api/v1/knowledge-bases
+GET    /api/v1/knowledge-bases/{id}
+PATCH  /api/v1/knowledge-bases/{id}
+DELETE /api/v1/knowledge-bases/{id}
+```
+
+创建请求示例：
+
+```json
+{
+  "name": "产品资料库",
+  "description": "产品说明书与技术规范",
+  "embedding_model_id": "bge-m3",
+  "chunking_profile": "structure-default"
+}
+```
+
+### 4.2 文档
+
+```text
+POST   /api/v1/knowledge-bases/{id}/documents
+GET    /api/v1/knowledge-bases/{id}/documents
+GET    /api/v1/documents/{id}
+DELETE /api/v1/documents/{id}
+POST   /api/v1/documents/{id}/reindex
+POST   /api/v1/documents/{id}/retry
+POST   /api/v1/knowledge-bases/{id}/reindex
+GET    /api/v1/documents/{document_id}/chunks/{chunk_id}/preview
+```
+
+本地上传可使用 `multipart/form-data`。大文件和企业对象存储使用分片上传与完成确认。
+
+当前上传白名单为 PDF、DOCX、XLS/XLSX、PPTX、HTML/HTM、TXT、MD/Markdown。批量上传会先完整校验格式，发现不支持的文件时整批拒绝并返回具体文件名，避免出现部分文件已写入但界面只显示一次失败的情况。PDF 引用预览验证文档与块的归属，从受控本地存储读取原文，在内存中按 `location.bbox` 绘制灰色高亮并返回 `image/png`；响应使用 `Cache-Control: no-store`。非 PDF 返回 `415 DOCUMENT_PREVIEW_UNSUPPORTED`，位置或归属无效返回 `404 DOCUMENT_LOCATION_NOT_FOUND`。
+
+`POST /api/v1/chat/completions` 接受可选的 `conversation_id` 与最多 12 条 `history`（服务实际使用最近 10 条）。历史只用于追问消歧，不作为事实依据；检索和回答仍受当前 `knowledge_base_ids` 与 `document_ids` 范围约束。响应为原生 `application/x-ndjson` 流。
+
+### 4.3 任务
+
+```text
+GET  /api/v1/jobs
+GET  /api/v1/jobs/{id}
+POST /api/v1/jobs/{id}/cancel
+GET  /api/v1/events
+```
+
+任务进度通过 SSE 或 WebSocket 推送。事件示例：
+
+```json
+{
+  "event": "job.progress",
+  "job_id": "...",
+  "stage": "embedding",
+  "progress": 0.68,
+  "message": "正在生成向量 340/500"
+}
+```
+
+### 4.4 检索
+
+```text
+POST /api/v1/retrieval/search
+```
+
+```json
+{
+  "query": "软件支持哪些操作系统？",
+  "knowledge_base_ids": ["..."],
+  "filters": {
+    "document_types": ["pdf", "docx", "xls", "xlsx", "txt", "md"],
+    "tags": ["正式发布"]
+  },
+  "limit": 10,
+  "debug": false
+}
+```
+
+当前 `POST /api/v1/retrieval/search` 还会返回 `index_mode`、`embedding` 与 `reranker` 状态。当前 `index_mode` 为 `hybrid-rrf-rerank-v1`；每个命中项可包含 `parent_chunk_id`、`parent_content`、`content_kind`、`location`、`vector_score`、`lexical_score`、`support_factor`、`retrieval_score`、`rerank_score`、`evidence_score`、`retrieval_mode`、`embedding_model_id` 和 `reranker_model_id`，用于检索诊断。`content` 是参与召回的精确子块，`parent_content` 只提供回答上下文；同一父块的多个结果会在重排后去重。
+
+### 4.5 问答
+
+```text
+POST /api/v1/chat/completions
+```
+
+请求示例：
+
+```json
+{
+  "conversation_id": null,
+  "knowledge_base_ids": ["..."],
+  "message": "根据安装手册，最低内存要求是什么？",
+  "model_id": "local-default",
+  "stream": true
+}
+```
+
+使用 `fetch()` 读取流式响应，避免 EventSource 只能使用 GET 而导致敏感数据进入 URL。建议事件类型：
+
+```text
+message.start
+retrieval.completed
+message.delta
+citation
+message.completed
+error
+```
+
+当前本地实现使用换行分隔 JSON（`application/x-ndjson`）返回上述事件。`citation` 事件先于包含 `[[n]]` 标记的正文增量发送，前端在完成事件后将标记解析为可点击来源。
+
+`citation` 包含精确 `chunk_id`、`parent_chunk_id`、文档 ID、文档名、格式、页码、章节、`excerpt`、父块 `context`、`content_kind` 和 `location`。PDF 的 `location` 示例：
+
+```json
+{
+  "kind": "pdf-bbox",
+  "page": 1,
+  "bbox": [72.0, 108.0, 420.0, 132.0],
+  "page_width": 595.0,
+  "page_height": 842.0
+}
+```
+
+完成事件示例：
+
+```json
+{
+  "event": "message.completed",
+  "message_id": "...",
+  "conversation_id": "...",
+  "finish_reason": "stop",
+  "usage": {
+    "input_tokens": 1240,
+    "output_tokens": 210
+  }
+}
+```
+
+### 4.6 模型
+
+```text
+GET  /api/v1/model/settings
+PUT  /api/v1/model/settings
+POST /api/v1/model/detect
+```
+
+设置示例：
+
+```json
+{
+  "provider": "ollama",
+  "base_url": "http://127.0.0.1:11434",
+  "model": "qwen3:8b",
+  "timeout_seconds": 90
+}
+```
+
+`provider` 可取 `auto`、`ollama`、`openai-compatible` 或 `extractive`。当前个人本地模式只接受 HTTP 回环地址，不接受公网 URL、URL 凭据或查询参数。检测结果区分 `ready`、`service-unavailable`、`model-missing`、`extractive` 和 `error`。
+
+`GET /api/v1/runtime/status` 同时返回回答模型、Embedding、Reranker、RapidOCR 状态、`index_mode` 和按模型/维度/版本聚合的 `indexes` 摘要。回答模型与 Embedding 都返回 `execution_mode`，用于区分正常自动选择和 CPU 兼容模式；OCR 明确报告纯本地 CPU 状态。回答模型不可用不影响检索与严格原文回答，因此 Knowledge API 本身仍保持 `running`。
+
+## 5. 幂等与并发
+
+- 上传完成、重建索引和删除操作支持 `Idempotency-Key`。
+- 更新资源使用版本号或 ETag 防止覆盖并发修改。
+- 长任务立即返回 `202 Accepted` 和任务资源地址。
+- API 只接受资源标识，不接受客户端提供的任意本地文件路径。
+
+## 6. 版本策略
+
+破坏性变化通过新的主版本路径发布。响应可以增加可选字段，但不得改变既有字段含义。桌面壳启动时检查 API 协议版本并在不兼容时给出明确升级提示。

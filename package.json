@@ -1,0 +1,36 @@
+{
+  "name": "zhiyu-knowledge-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --pretty false",
+    "api:install": "node scripts/run-python.mjs -m pip install -r services/knowledge-api/requirements-dev.txt",
+    "api:test": "node scripts/run-python.mjs -m pytest services/knowledge-api",
+    "api:eval": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_retrieval_eval.py",
+    "api:eval:gate": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_retrieval_eval.py --min-recall 0.95 --min-mrr 0.95 --min-chunk-mrr 0.95 --min-answerability 1.0",
+    "api:eval:bge": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_retrieval_eval.py --embedding-provider ollama --embedding-model bge-m3",
+    "sidecar:build": "node scripts/run-python.mjs scripts/build_sidecar.py",
+    "sidecar:smoke": "node scripts/run-python.mjs scripts/smoke_sidecar.py",
+    "desktop:dev": "npm run sidecar:build && tauri dev",
+    "desktop:build": "npm run sidecar:build && tauri build",
+    "desktop:check": "cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

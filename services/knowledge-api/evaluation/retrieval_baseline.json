@@ -1,0 +1,40 @@
+{
+  "version": "zhiyu-retrieval-v1",
+  "provenance": {"type": "synthetic", "organization": "anonymous", "reviewed_at": ""},
+  "knowledge_base_id": "enterprise",
+  "documents": [
+    {
+      "name": "员工差旅管理制度.md",
+      "content": "# 住宿标准\n上海、北京、深圳属于一类城市。普通员工住宿费上限为500元每晚，部门负责人住宿费上限为650元每晚。\n\n# 报销时限\n员工应在出差结束后5个工作日内提交差旅报销申请，并附住宿发票与行程单。"
+    },
+    {
+      "name": "采购审批办法.md",
+      "content": "# 审批权限\n采购金额低于1万元由部门负责人审批；1万元以上且低于5万元需要财务负责人审批；达到或超过5万元需要总经理审批。\n\n# 供应商材料\n采购申请原则上应附至少三家供应商的有效报价。"
+    },
+    {
+      "name": "员工休假制度.md",
+      "content": "# 年假\n连续工作满1年不满10年的员工每年享有5天年假，满10年的员工每年享有10天年假。\n\n# 申请流程\n连续休假超过3天的，应至少提前3个工作日提交申请。"
+    },
+    {
+      "name": "系统故障处理手册.txt",
+      "content": "错误代码 XZ-1042 表示本地授权文件已经过期。请从管理员处获取新的授权文件，替换后重新启动本地服务。"
+    },
+    {
+      "name": "项目验收清单.md",
+      "content": "# 验收材料\n项目验收必须提交测试报告、部署清单、用户操作手册和遗留问题列表。材料齐全后由项目负责人发起验收。"
+    }
+  ],
+  "cases": [
+    {"id": "travel-hotel", "query": "上海普通员工住宿上限是多少？", "relevant_documents": ["员工差旅管理制度.md"], "answerable": true},
+    {"id": "travel-manager", "query": "部门负责人去上海出差每晚可以报销多少？", "relevant_documents": ["员工差旅管理制度.md"], "answerable": true},
+    {"id": "travel-claim", "query": "出差结束后多久必须提交报销？", "relevant_documents": ["员工差旅管理制度.md"], "answerable": true},
+    {"id": "purchase-approval", "query": "采购金额达到五万元由谁审批？", "relevant_documents": ["采购审批办法.md"], "answerable": true},
+    {"id": "purchase-quotes", "query": "采购申请需要几家供应商报价？", "relevant_documents": ["采购审批办法.md"], "answerable": true},
+    {"id": "leave-apply", "query": "连续休假超过三天需要提前多久申请？", "relevant_documents": ["员工休假制度.md"], "answerable": true},
+    {"id": "exact-error-code", "query": "XZ-1042 错误代码是什么意思？", "relevant_documents": ["系统故障处理手册.txt"], "answerable": true},
+    {"id": "project-acceptance", "query": "项目验收需要提交哪些材料？", "relevant_documents": ["项目验收清单.md"], "answerable": true},
+    {"id": "no-evidence", "query": "公司食堂今天的午餐菜单是什么？", "relevant_documents": [], "answerable": false},
+    {"id": "hard-negative-purchase", "query": "采购办公电脑必须选择哪个品牌？", "relevant_documents": [], "answerable": false},
+    {"id": "hard-negative-employee", "query": "员工住房贷款最高额度是多少？", "relevant_documents": [], "answerable": false}
+  ]
+}

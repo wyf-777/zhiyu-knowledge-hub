@@ -1,0 +1,12 @@
+fastapi>=0.115,<1.0
+uvicorn>=0.34,<1.0
+python-multipart>=0.0.20,<1.0
+pypdf>=5.4,<6.0
+PyMuPDF>=1.24,<2.0
+python-docx>=1.1,<2.0
+python-pptx>=1.0,<2.0
+openpyxl>=3.1,<4.0
+xlrd>=2.0,<3.0
+beautifulsoup4>=4.12,<5.0
+rapidocr_onnxruntime>=1.4,<2.0
+httpx>=0.28,<1.0
