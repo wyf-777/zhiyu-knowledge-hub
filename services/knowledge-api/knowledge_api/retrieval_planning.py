@@ -62,6 +62,13 @@ def build_retrieval_queries(question: str) -> list[str]:
         return []
     queries = [original]
 
+    # Narrow typo recovery for a frequent Chinese IME confusion. Keep the
+    # original query and add the corrected wording as a second retrieval route
+    # so user text is never silently rewritten outside the annual-leave topic.
+    if re.search(r"年假|年休假", original) and re.search(r"修完|修过|修年假|修年休假", original):
+        corrected = re.sub(r"修(?=完|过|年假|年休假)", "休", original)
+        _append_unique(queries, corrected)
+
     clauses = [_normalize(item) for item in re.split(r"[？?；;]+", original) if _normalize(item)]
     if len(clauses) > 1:
         subject = _subject_prefix(clauses[0])
@@ -80,6 +87,11 @@ def build_retrieval_queries(question: str) -> list[str]:
         range_query = _NUMERIC_RANGE_VALUE.sub(" ", original)
         range_query = re.sub(r"\d+(?:\.\d+)?", " ", range_query)
         _append_unique(queries, f"{range_query} 标准 档位 条件")
+
+    if "迟到" in original:
+        _append_unique(queries, "考勤迟到 处罚档位 扣款 旷工")
+        if re.search(r"\d+(?:\.\d+)?\s*(?:分钟|小时)", original):
+            _append_unique(queries, "迟到 15分钟 30分钟 2小时 区间")
 
     alias_query = original
     for source, target in _QUERY_ALIASES:

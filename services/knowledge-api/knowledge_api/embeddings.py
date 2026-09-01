@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
 from urllib.parse import urlparse
@@ -32,6 +34,16 @@ def hashing_embed(text: str) -> list[float]:
         vector[index] += 1.0 if digest[4] & 1 else -1.0
     norm = math.sqrt(sum(value * value for value in vector))
     return [round(value / norm, 6) for value in vector] if norm else vector
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or len(left) != len(right):
+        return 0.0
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if not left_norm or not right_norm:
+        return 0.0
+    return sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)
 
 
 def normalize_loopback_url(value: str) -> str:
@@ -77,6 +89,7 @@ class HashingEmbeddingProvider:
 
 class OllamaEmbeddingProvider:
     index_version = 2
+    cache_size = 256
 
     def __init__(self, base_url: str, model: str, *, transport: httpx.BaseTransport | None = None) -> None:
         self.base_url = normalize_loopback_url(base_url)
@@ -86,6 +99,8 @@ class OllamaEmbeddingProvider:
         self.model_id = f"ollama:{self.model}"
         self._transport = transport
         self._force_cpu = False
+        self._cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._cache_lock = threading.RLock()
         probe = self.embed(["知域本地知识库索引"])
         if not probe or not probe[0]:
             raise ValueError("Embedding 模型没有返回有效向量。")
@@ -94,7 +109,17 @@ class OllamaEmbeddingProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        payload: dict[str, object] = {"model": self.model, "input": texts}
+        missing: list[str] = []
+        with self._cache_lock:
+            for text in texts:
+                if text in self._cache:
+                    self._cache.move_to_end(text)
+                elif text not in missing:
+                    missing.append(text)
+            if not missing:
+                return [list(self._cache[text]) for text in texts]
+
+        payload: dict[str, object] = {"model": self.model, "input": missing}
         if self._force_cpu:
             payload["options"] = {"num_gpu": 0}
         with httpx.Client(timeout=90, transport=self._transport, trust_env=False) as client:
@@ -109,16 +134,22 @@ class OllamaEmbeddingProvider:
                 self._force_cpu = True
                 response = client.post(
                     f"{self.base_url}/api/embed",
-                    json={"model": self.model, "input": texts, "options": {"num_gpu": 0}},
+                    json={"model": self.model, "input": missing, "options": {"num_gpu": 0}},
                 )
                 response.raise_for_status()
             embeddings = response.json().get("embeddings")
-        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+        if not isinstance(embeddings, list) or len(embeddings) != len(missing):
             raise ValueError("Ollama Embedding 返回数量与输入不一致。")
         vectors = [[float(value) for value in vector] for vector in embeddings]
         if not vectors or any(not vector or len(vector) != len(vectors[0]) for vector in vectors):
             raise ValueError("Ollama Embedding 返回了无效向量。")
-        return vectors
+        with self._cache_lock:
+            for text, vector in zip(missing, vectors, strict=True):
+                self._cache[text] = vector
+                self._cache.move_to_end(text)
+            while len(self._cache) > self.cache_size:
+                self._cache.popitem(last=False)
+            return [list(self._cache[text]) for text in texts]
 
     @property
     def execution_mode(self) -> str:
@@ -163,6 +194,12 @@ class EmbeddingManager:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return self.provider.embed(texts)
+
+    def similarity(self, left: str, right: str) -> float:
+        vectors = self.embed([left, right])
+        if len(vectors) != 2:
+            return 0.0
+        return cosine_similarity(vectors[0], vectors[1])
 
     def status(self) -> EmbeddingStatus:
         if isinstance(self.provider, OllamaEmbeddingProvider):

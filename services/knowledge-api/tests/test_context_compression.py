@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from knowledge_api.answering import fast_factual_answer
+from knowledge_api.answering import fast_factual_answer, filter_topic_consistent_results
 from knowledge_api.context_compression import compact_evidence_context, compact_evidence_text
 
 
@@ -114,6 +114,33 @@ def test_rule_overview_keeps_all_conditions_from_one_policy_paragraph() -> None:
     assert "累计达到3次" in compacted
 
 
+def test_late_duration_answer_uses_the_supported_policy_bracket() -> None:
+    evidence = [{
+        "content": "迟到超过15分钟不足30分钟的，每次扣款50元。",
+        "parent_content": (
+            "迟到不足15分钟（含）的，当月第一次口头提醒，不扣款；当月第二次起每次扣款30元。"
+            "迟到超过15分钟不足30分钟的，每次扣款50元。迟到超过30分钟不足2小时的，按旷工半天处理。"
+            "迟到2小时及以上的，按旷工一天处理。自然月内迟到累计达到3次的，无论单次时长，"
+            "加记旷工半天，并取消当月全勤奖。"
+        ),
+    }]
+
+    answer = fast_factual_answer("迟到20分钟怎么算？", evidence)
+
+    assert answer is not None
+    assert "20分钟" in answer and "50元" in answer
+    assert "累计达到 **3次**" in answer
+
+
+def test_late_duration_does_not_invent_an_unwritten_exact_thirty_minute_boundary() -> None:
+    evidence = [{
+        "content": "迟到超过15分钟不足30分钟的，每次扣款50元。",
+        "parent_content": "迟到超过15分钟不足30分钟的，每次扣款50元。迟到超过30分钟不足2小时的，按旷工半天处理。",
+    }]
+
+    assert fast_factual_answer("迟到30分钟怎么算？", evidence) is None
+
+
 def test_salary_date_is_answered_from_clear_policy_sentence() -> None:
     evidence = [{
         "content": "工资于每月15日发放。",
@@ -126,6 +153,45 @@ def test_salary_date_is_answered_from_clear_policy_sentence() -> None:
     assert "15 日" in answer
     assert "提前至最近工作日" in answer
     assert "[[1]]" in answer
+
+
+def test_multi_part_departure_question_bypasses_single_salary_fast_answer() -> None:
+    evidence = [
+        {
+            "content": "离职当月工资在办理完离职手续后的次月15日发放。",
+            "parent_content": (
+                "未办结交接、未归还资产的，公司有权暂缓办理离职证明并依法追索。"
+                "离职当月工资在办理完离职手续后的次月15日发放。"
+            ),
+        },
+        {
+            "content": "工资于每月15日发放。",
+            "parent_content": "工资于每月15日发放。如遇节假日，提前至最近工作日发放。",
+        },
+    ]
+
+    assert fast_factual_answer("离职手续没办完，工资什么时候发？电脑不还行吗？", evidence) is None
+
+
+def test_conditional_salary_question_bypasses_generic_fast_answer_without_multiple_question_marks() -> None:
+    evidence = [{
+        "content": "工资于每月15日发放。",
+        "parent_content": "工资于每月15日发放。",
+    }]
+
+    assert fast_factual_answer("电脑不归还，离职工资什么时候发？", evidence) is None
+
+
+def test_multi_part_topic_filter_keeps_evidence_for_every_answer_slot() -> None:
+    results = [
+        {"content": "离职工资在手续办完后的次月15日发放。"},
+        {"content": "电脑属于公司资产，离职时必须归还。"},
+    ]
+
+    assert filter_topic_consistent_results(
+        "离职手续没办完，工资什么时候发？电脑不还行吗？",
+        results,
+    ) == results
 
 
 def test_half_year_tenure_is_below_leave_eligibility_threshold() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import time
 from dataclasses import asdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -22,7 +23,7 @@ from .embeddings import EmbeddingManager, EmbeddingProviderName
 from .ingestion import DocumentProcessor
 from .retrieval_planning import build_retrieval_queries
 from .local_files import open_local_document
-from .modeling import ModelManager, ModelProvider, ModelSettings
+from .modeling import ModelManager, ModelProvider, ModelSettings, query_context_needs_similarity
 from .reranking import RerankerManager, RerankerProviderName
 from .storage import KnowledgeStore
 
@@ -344,32 +345,91 @@ def create_app(
 
     @app.post("/api/v1/chat/completions")
     async def chat_completion(payload: ChatCompletionRequest, request: Request) -> StreamingResponse:
+        request_started_at = time.perf_counter()
         if any(not store.get_knowledge_base(item) for item in payload.knowledge_base_ids):
             raise api_error(404, "KNOWLEDGE_BASE_NOT_FOUND", "问答范围包含不存在的知识库。")
         if any((document := store.get_document(item)) is None or document["knowledge_base_id"] not in payload.knowledge_base_ids for item in payload.document_ids):
             raise api_error(400, "DOCUMENT_SCOPE_INVALID", "指定文档不属于当前问答范围。")
         history = [item.model_dump() for item in payload.history[-10:]]
-        retrieval_query = await model_manager.rewrite_query(payload.message.strip(), history)
-        retrieval_queries = build_retrieval_queries(retrieval_query)
+        current_question = payload.message.strip()
+        topic_similarity: float | None = None
+        if query_context_needs_similarity(current_question, history):
+            previous_question = next(
+                (
+                    str(item.get("content") or "").strip()
+                    for item in reversed(history)
+                    if item.get("role") == "user" and item.get("content")
+                ),
+                "",
+            )
+            if previous_question:
+                try:
+                    topic_similarity = await run_in_threadpool(
+                        embedding_manager.similarity,
+                        current_question,
+                        previous_question,
+                    )
+                except (httpx.HTTPError, ValueError, TypeError):
+                    topic_similarity = None
+        query_plan = await model_manager.plan_query(
+            current_question,
+            history,
+            topic_similarity=topic_similarity,
+        )
+        planning_completed_at = time.perf_counter()
+        retrieval_queries: list[str] = []
+        for root_query in query_plan.retrieval_questions:
+            for planned_query in build_retrieval_queries(root_query):
+                if planned_query not in retrieval_queries:
+                    retrieval_queries.append(planned_query)
+                if len(retrieval_queries) >= 5:
+                    break
+            if len(retrieval_queries) >= 5:
+                break
         search_results = await run_in_threadpool(processor.search_many, retrieval_queries, payload.knowledge_base_ids, 12, payload.document_ids)
+        retrieval_completed_at = time.perf_counter()
         # Use the standalone question for both retrieval and answer grounding.
         # Otherwise a follow-up such as “是哪16座” retrieves the right table but
         # the compressor cannot know which list inside that table must be kept.
-        answer = await model_manager.stream(retrieval_query, search_results, history)
+        answer_history = history if query_plan.use_answer_history else []
+        answer = await model_manager.stream(query_plan.standalone_question, search_results, answer_history)
+        answer_prepared_at = time.perf_counter()
         message_id = str(uuid4())
+
+        def elapsed_ms(started_at: float, completed_at: float | None = None) -> int:
+            return round(((completed_at or time.perf_counter()) - started_at) * 1000)
 
         def event(name: str, **data: object) -> bytes:
             return (json.dumps({"event": name, **data}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
         async def stream_events():
-            yield event("message.start", message_id=message_id, provider=answer.provider)
-            yield event("retrieval.completed", count=len(answer.citations), no_evidence=answer.no_evidence)
+            yield event(
+                "message.start",
+                message_id=message_id,
+                provider=answer.provider,
+                timings_ms={
+                    "planning": elapsed_ms(request_started_at, planning_completed_at),
+                    "retrieval": elapsed_ms(planning_completed_at, retrieval_completed_at),
+                    "answer_setup": elapsed_ms(retrieval_completed_at, answer_prepared_at),
+                    "before_stream": elapsed_ms(request_started_at, answer_prepared_at),
+                },
+            )
+            yield event(
+                "retrieval.completed",
+                count=len(answer.citations),
+                no_evidence=answer.no_evidence,
+                latency_ms=elapsed_ms(planning_completed_at, retrieval_completed_at),
+            )
             for citation in answer.citations:
                 yield event("citation", citation=citation)
+            first_delta_at: float | None = None
             async for delta in answer.deltas:
                 if await request.is_disconnected():
                     return
+                if first_delta_at is None:
+                    first_delta_at = time.perf_counter()
                 yield event("message.delta", delta=delta)
+            completed_at = time.perf_counter()
             yield event(
                 "message.completed",
                 message_id=message_id,
@@ -377,6 +437,11 @@ def create_app(
                 no_evidence=answer.no_evidence,
                 suggestions=answer.suggestions,
                 provider=answer.provider,
+                timings_ms={
+                    "first_answer_delta": elapsed_ms(request_started_at, first_delta_at) if first_delta_at else None,
+                    "generation": elapsed_ms(answer_prepared_at, completed_at),
+                    "total": elapsed_ms(request_started_at, completed_at),
+                },
             )
 
         return StreamingResponse(

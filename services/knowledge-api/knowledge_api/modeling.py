@@ -12,11 +12,18 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .answering import ExtractiveAnswerProvider, GroundedAnswer, fast_factual_answer, select_evidence
+from .answering import (
+    ExtractiveAnswerProvider,
+    GroundedAnswer,
+    fast_factual_answer,
+    filter_topic_consistent_results,
+    select_evidence,
+)
 from .context_compression import compact_evidence_context
 
 ModelProvider = Literal["auto", "ollama", "openai-compatible", "extractive"]
 ModelState = Literal["ready", "service-unavailable", "model-missing", "extractive", "error"]
+ContextDecision = Literal["independent", "follow_up", "uncertain"]
 
 
 @dataclass
@@ -46,6 +53,23 @@ class GroundedAnswerStream:
     deltas: AsyncIterator[str]
 
 
+@dataclass(frozen=True)
+class QueryContextPlan:
+    """Safe query plan for a conversational retrieval turn.
+
+    ``standalone_question`` is the only question sent to the answerer.
+    ``retrieval_questions`` may contain both the current wording and a rewritten
+    wording only when the turn is genuinely ambiguous. It never contains a
+    mechanical concatenation of two user questions.
+    """
+
+    decision: ContextDecision
+    standalone_question: str
+    retrieval_questions: tuple[str, ...]
+    confidence: float
+    use_answer_history: bool
+
+
 def _prediction_budget(question: str) -> int:
     length = len(question.strip())
     if re.search(r"所有|全部|完整|逐一|罗列|列出|比较|分别", question):
@@ -69,12 +93,67 @@ def _history_text(history: list[dict[str, str]], *, max_items: int = 8, max_char
     return "\n".join(lines)
 
 
-def _needs_query_rewrite(question: str, history: list[dict[str, str]]) -> bool:
+def _last_user_question(history: list[dict[str, str]]) -> str:
+    return next(
+        (
+            str(item.get("content") or "").strip()
+            for item in reversed(history)
+            if item.get("role") == "user" and item.get("content")
+        ),
+        "",
+    )
+
+
+def _self_contained_topic_query(question: str) -> str | None:
+    """Normalize follow-up-looking wording that already names its own topic."""
+
+    normalized = re.sub(r"\s+", "", question).strip()
+    direct_topic = re.fullmatch(
+        r"(?:那)?(?P<topic>[\u3400-\u9fffA-Za-z0-9_-]{1,20}?)(?:问题)?(?:是)?(?:怎么|如何)规定的?[？?]?",
+        normalized,
+    )
+    if direct_topic and direct_topic.group("topic") not in {"他", "她", "它", "这个", "该", "上述"}:
+        return f"{direct_topic.group('topic').removesuffix('问题')}问题是怎么规定的？"
+
+    explicit_topic = re.search(r"这个(?P<topic>[\u3400-\u9fffA-Za-z0-9_-]{1,20}?)(?:问题)?(?:是|的|怎|如|[？?])", normalized)
+    if explicit_topic and re.search(r"规定|处理|计算|认定", normalized):
+        topic = explicit_topic.group("topic").removesuffix("问题")
+        predicate = "怎么规定" if "规定" in normalized else "怎么处理" if "处理" in normalized else "怎么认定"
+        return f"{topic}问题是{predicate}的？"
+    return None
+
+
+def _initial_context_decision(question: str, history: list[dict[str, str]]) -> ContextDecision:
+    """Classify dependency by question completeness, never by length alone."""
+
     if not history:
-        return False
-    normalized = re.sub(r"\s+", "", question)
-    followup_markers = ("那", "那么", "这个", "这些", "上述", "前面", "继续", "还有", "分别", "具体", "为什么", "呢")
-    return len(normalized) <= 48 or normalized.startswith(followup_markers) or normalized.endswith("呢")
+        return "independent"
+    normalized = re.sub(r"\s+", "", question).strip()
+    if _self_contained_topic_query(question):
+        return "independent"
+    if re.fullmatch(r"(?:是)?哪\d+(?:座|个|项|条|家)[？?]?", normalized):
+        return "follow_up"
+    if re.fullmatch(r"那.+?(?:呢|怎么样|如何)[？?]?", normalized):
+        return "follow_up"
+    if re.fullmatch(r"那(?!.*(?:哪|什么|多少|怎么|如何|是否|能否|可以|有几)).{1,12}[？?]?", normalized):
+        return "follow_up"
+    if re.search(r"上述|前述|前面|刚才|上面|继续|这些|那些|该标准|该规定|这个标准|这个规定", normalized):
+        return "follow_up"
+    if re.fullmatch(
+        r"(?:那|那么)?(?:这个|那个|它|他|她|该项|该条)?(?:标准|条件|例外|原因|结果|规定|流程|处罚)?"
+        r"(?:是)?(?:多少|什么|哪些|怎么|如何|为什么|呢|怎么样)[？?]?",
+        normalized,
+    ):
+        return "uncertain"
+    if normalized.endswith("呢？") or normalized.endswith("呢?"):
+        return "uncertain"
+    return "independent"
+
+
+def query_context_needs_similarity(question: str, history: list[dict[str, str]]) -> bool:
+    """Only ambiguous turns pay for a semantic topic comparison."""
+
+    return _initial_context_decision(question, history) == "uncertain" and bool(_last_user_question(history))
 
 
 def _previous_question_topic(question: str) -> str:
@@ -89,20 +168,11 @@ def _previous_question_topic(question: str) -> str:
 
 def _deterministic_followup_query(question: str, history: list[dict[str, str]]) -> str | None:
     normalized = re.sub(r"\s+", "", question).strip()
-    last_user = next(
-        (str(item.get("content") or "").strip() for item in reversed(history) if item.get("role") == "user" and item.get("content")),
-        "",
-    )
+    last_user = _last_user_question(history)
 
-    direct_topic = re.fullmatch(r"(?:那)?(?P<topic>[\u3400-\u9fffA-Za-z0-9_-]{1,20}?)(?:问题)?(?:是)?(?:怎么|如何)规定的?[？?]?", normalized)
-    if direct_topic and direct_topic.group("topic") not in {"他", "它", "这个", "该", "上述"}:
-        return f"{direct_topic.group('topic').removesuffix('问题')}问题是怎么规定的？"
-
-    explicit_topic = re.search(r"这个(?P<topic>[\u3400-\u9fffA-Za-z0-9_-]{1,20}?)(?:问题)?(?:是|的|怎|如|[？?])", normalized)
-    if explicit_topic and re.search(r"规定|处理|计算|认定", normalized):
-        topic = explicit_topic.group("topic").removesuffix("问题")
-        predicate = "怎么规定" if "规定" in normalized else "怎么处理" if "处理" in normalized else "怎么认定"
-        return f"{topic}问题是{predicate}的？"
+    self_contained = _self_contained_topic_query(question)
+    if self_contained:
+        return self_contained
 
     count_followup = re.fullmatch(r"(?:是)?哪(?P<count>\d+)(?P<unit>座|个|项|条|家)[？?]?", normalized)
     if count_followup and last_user:
@@ -244,26 +314,39 @@ class ModelManager:
     def _client(self, timeout: float) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=timeout, transport=self._transport, trust_env=False)
 
-    async def rewrite_query(self, question: str, history: list[dict[str, str]]) -> str:
-        """Turn a context-dependent follow-up into a standalone retrieval query."""
+    async def plan_query(
+        self,
+        question: str,
+        history: list[dict[str, str]],
+        *,
+        topic_similarity: float | None = None,
+    ) -> QueryContextPlan:
+        """Build a context-safe standalone and retrieval plan for one turn."""
 
-        if not _needs_query_rewrite(question, history):
-            return question
-        last_user = next(
-            (str(item.get("content") or "").strip() for item in reversed(history) if item.get("role") == "user" and item.get("content")),
-            "",
-        )
-        deterministic_fallback = f"{last_user}\n追问：{question}".strip() if last_user else question
-        # Short follow-ups usually introduce one concrete replacement subject
-        # (for example “那部门负责人呢”). Combining them with the previous
-        # question is both reliable for hybrid retrieval and avoids a full 8B
-        # model call before the user can see the first answer token.
-        if len(re.sub(r"\s+", "", question)) <= 24:
-            return _deterministic_followup_query(question, history) or deterministic_fallback
+        decision = _initial_context_decision(question, history)
+        self_contained = _self_contained_topic_query(question)
+        if decision == "independent":
+            standalone = self_contained or question
+            return QueryContextPlan("independent", standalone, (standalone,), 0.96, False)
+
+        deterministic = _deterministic_followup_query(question, history)
+        if deterministic:
+            return QueryContextPlan("follow_up", deterministic, (deterministic,), 0.98, False)
+
+        if decision == "uncertain" and topic_similarity is not None:
+            if topic_similarity <= 0.22:
+                return QueryContextPlan("independent", question, (question,), 0.88, False)
+            if topic_similarity >= 0.48:
+                decision = "follow_up"
+
+        # A failed or unavailable rewriter must fall back to the current
+        # question. Reintroducing the previous question here is the source of
+        # cross-topic answer reuse.
+        safe_fallback = QueryContextPlan(decision, question, (question,), 0.55, False)
         settings = self.get_settings()
         status = await self.status()
         if status.state != "ready":
-            return deterministic_fallback
+            return safe_fallback
 
         prompt = (
             "请根据对话历史，把最后的追问改写成一条语义完整、可独立检索的问题。"
@@ -304,9 +387,19 @@ class ModelManager:
                     response.raise_for_status()
                     rewritten = str(response.json()["choices"][0]["message"]["content"]).strip()
             rewritten = re.sub(r"^(改写后的问题|问题)[:：]\s*", "", rewritten).strip().strip('"“”')
-            return rewritten if 2 <= len(rewritten) <= 2000 else deterministic_fallback
+            if not 2 <= len(rewritten) <= 2000:
+                return safe_fallback
+            retrieval_questions = (rewritten,)
+            if decision == "uncertain" and rewritten != question:
+                retrieval_questions = (question, rewritten)
+            return QueryContextPlan(decision, rewritten, retrieval_questions, 0.84, False)
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
-            return deterministic_fallback
+            return safe_fallback
+
+    async def rewrite_query(self, question: str, history: list[dict[str, str]]) -> str:
+        """Compatibility wrapper returning the safe standalone question."""
+
+        return (await self.plan_query(question, history)).standalone_question
 
     def _answer_prompts(
         self,
@@ -333,10 +426,13 @@ class ModelManager:
         system_prompt = (
             "你是知域本地知识库助手。只能依据给出的本地资料回答，不得使用常识补全或猜测。"
             "对话历史只用于理解指代和追问，不是事实依据。每个事实句末必须标注对应引用 [[1]]、[[2]]。"
+            "首句应在40字内直接给出第一个结论，并在句末立即标注引用；不要先写背景、分析过程或复述问题。"
             "涉及金额、日期、天数、比例、职级或审批人时必须逐字核对原文。资料不足或相互冲突时明确说明无法确认。"
             "禁止复述文档标题、章节目录、原始 Markdown 表格或分隔线，禁止把检索资料原样抄写成答案。"
             f"{requirement_text}使用简洁中文和 Markdown，不要输出参考资料列表之外的链接。"
         )
+        if len([part for part in re.split(r"[？?；;]+", question) if part.strip()]) > 1:
+            system_prompt += "当前问题包含多项诉求，必须按原顺序逐项回答，不得因先找到其中一项就省略其余问题。"
         history_block = _history_text(history)
         user_prompt = (
             (f"对话历史：\n{history_block}\n\n" if history_block else "")
@@ -351,6 +447,7 @@ class ModelManager:
         history: list[dict[str, str]] | None = None,
     ) -> GroundedAnswerStream:
         history = history or []
+        search_results = filter_topic_consistent_results(question, search_results)
         fallback = self._extractive.build(question, search_results)
         if fallback.no_evidence:
             return GroundedAnswerStream(
@@ -585,6 +682,7 @@ class ModelManager:
         search_results: list[dict[str, Any]],
         history: list[dict[str, str]] | None = None,
     ) -> GroundedAnswer:
+        search_results = filter_topic_consistent_results(question, search_results)
         fallback = self._extractive.build(question, search_results)
         if fallback.no_evidence:
             return fallback

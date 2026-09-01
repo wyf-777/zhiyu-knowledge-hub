@@ -94,7 +94,7 @@ def required_query_anchors(query: str) -> set[str]:
     range_or_input_condition = re.search(
         r"司龄|工龄|年龄|入职\s*(?:半|\d)|工作\s*(?:半|\d)|满\s*\d|不满\s*\d|不足\s*\d|"
         r"超过\s*\d|以内|以上|以下|档位|区间|怎么处理|如何处理|如何处罚|什么后果|"
-        r"能不能报|能否报|可以报|可否报|能不能住|差多少|相差多少",
+        r"能不能报|能否报|可以报|可否报|能不能住|差多少|相差多少|迟到|怎么算|如何计算",
         query,
     )
     if range_or_input_condition:

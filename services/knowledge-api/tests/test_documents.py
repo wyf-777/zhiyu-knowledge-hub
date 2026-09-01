@@ -218,6 +218,8 @@ async def test_streaming_chat_uses_real_retrieval_and_citations(tmp_path: Path) 
     assert response.headers["content-type"].startswith("application/x-ndjson")
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[0]["event"] == "message.start"
+    assert set(events[0]["timings_ms"]) == {"planning", "retrieval", "answer_setup", "before_stream"}
+    assert all(value >= 0 for value in events[0]["timings_ms"].values())
     assert any(event["event"] == "retrieval.completed" and event["count"] >= 1 for event in events)
     citation = next(event["citation"] for event in events if event["event"] == "citation")
     assert citation["document_name"] == "差旅制度.txt"
@@ -226,6 +228,8 @@ async def test_streaming_chat_uses_real_retrieval_and_citations(tmp_path: Path) 
     assert "[[1]]" in answer
     assert events[-1]["event"] == "message.completed"
     assert events[-1]["no_evidence"] is False
+    assert events[-1]["timings_ms"]["first_answer_delta"] is not None
+    assert events[-1]["timings_ms"]["total"] >= events[-1]["timings_ms"]["generation"]
 
 
 @pytest.mark.anyio
@@ -259,6 +263,45 @@ async def test_follow_up_chat_uses_recent_history_for_retrieval(tmp_path: Path) 
     )
     assert response.status_code == 200
     assert "650元" in answer
+
+
+@pytest.mark.anyio
+async def test_new_short_topic_does_not_reuse_previous_allowance_answer(tmp_path: Path) -> None:
+    content = (
+        "# 通讯补贴\n经理通讯补贴为每月200元，总监通讯补贴为每月400元。\n\n"
+        "# 考勤迟到\n迟到不足15分钟（含）的，当月第一次口头提醒，不扣款；当月第二次起每次扣款30元。"
+        "迟到超过15分钟不足30分钟的，每次扣款50元。"
+        "迟到超过30分钟不足2小时的，按旷工半天处理。迟到2小时及以上的，按旷工一天处理。"
+    )
+    async with api_client(tmp_path) as client:
+        await client.post(
+            "/api/v1/knowledge-bases/enterprise/documents",
+            headers=HEADERS,
+            files=[("files", ("人事制度.md", content.encode("utf-8"), "text/markdown"))],
+        )
+        response = await client.post(
+            "/api/v1/chat/completions",
+            headers=HEADERS,
+            json={
+                "message": "迟到20分钟怎么算？",
+                "knowledge_base_ids": ["enterprise"],
+                "history": [
+                    {"role": "user", "content": "经理和总监通讯补贴差多少？"},
+                    {"role": "assistant", "content": "两者相差200元。"},
+                ],
+                "stream": True,
+            },
+        )
+
+    answer = "".join(
+        event["delta"]
+        for event in (json.loads(line) for line in response.text.splitlines())
+        if event["event"] == "message.delta"
+    )
+    assert response.status_code == 200
+    assert "20分钟" in answer
+    assert "50元" in answer
+    assert "通讯补贴" not in answer
 
 
 @pytest.mark.anyio

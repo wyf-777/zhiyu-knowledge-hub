@@ -44,6 +44,19 @@ def test_half_year_leave_question_adds_eligibility_bracket_vocabulary() -> None:
     assert any("连续工作满1年" in query and "年假" in query for query in queries)
 
 
+def test_annual_leave_typo_adds_narrow_corrected_retrieval_route() -> None:
+    queries = build_retrieval_queries("年假没有修完可以换成工资吗？")
+
+    assert queries[0] == "年假没有修完可以换成工资吗"
+    assert "年假没有休完可以换成工资吗" in queries
+
+
+def test_unrelated_repair_word_is_not_silently_corrected() -> None:
+    queries = build_retrieval_queries("电脑没有修完可以领备用机吗？")
+
+    assert not any("休完" in query for query in queries)
+
+
 def test_false_expense_claim_adds_violation_synonyms() -> None:
     queries = build_retrieval_queries("虚假报销6000元怎么处理？")
 
@@ -54,3 +67,10 @@ def test_allowance_difference_adds_standard_and_difference_terms() -> None:
     queries = build_retrieval_queries("经理和总监通讯补贴差多少？")
 
     assert any("补贴标准" in query and "差额" in query for query in queries)
+
+
+def test_late_duration_adds_attendance_and_range_vocabulary() -> None:
+    queries = build_retrieval_queries("迟到20分钟怎么算？")
+
+    assert any("考勤迟到" in query and "处罚档位" in query for query in queries)
+    assert any("15分钟" in query and "30分钟" in query for query in queries)

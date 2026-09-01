@@ -10,9 +10,57 @@ from .retrieval_planning import alternate_questions
 MIN_EVIDENCE_SCORE = 0.45
 MAX_EVIDENCE_ITEMS = 6
 
+_TOPIC_EVIDENCE_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (re.compile(r"迟到"), ("迟到",)),
+    (re.compile(r"年假|年休假"), ("年假", "年休假")),
+    (re.compile(r"新一线城市"), ("新一线",)),
+    (re.compile(r"虚假报销"), ("虚假报销", "虚假发票", "重复报销", "拆票", "私人消费冒充公务")),
+    (re.compile(r"通讯补贴|通信补贴"), ("通讯补贴", "通信补贴", "话费补贴")),
+    (re.compile(r"工资.*(?:发|哪天|几号)|(?:什么时候|哪天|几号).*发工资|发薪"), ("工资发放", "发薪", "工资")),
+)
+
+_CONDITIONAL_SALARY_CONTEXT = re.compile(
+    r"离职|离岗|手续|交接|资产|电脑|设备|工卡|门禁卡|归还|不还|未还|借款|结清"
+)
+
+
+def _question_clauses(question: str) -> list[str]:
+    return [part.strip(" ，,。！!") for part in re.split(r"[？?；;]+", question) if part.strip(" ，,。！!")]
+
+
+def _is_multi_part_question(question: str) -> bool:
+    """Return whether one turn contains multiple independently answerable slots."""
+
+    return len(_question_clauses(question)) > 1
+
 
 def evidence_score(item: dict[str, Any]) -> float:
     return float(item.get("evidence_score", item.get("score", 0.0)))
+
+
+def filter_topic_consistent_results(question: str, search_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reject evidence from a clearly different explicit topic.
+
+    This is intentionally a narrow safety gate. It activates only when exactly
+    one explicit policy topic is present, so broad or multi-part questions keep
+    the existing retrieval behavior.
+    """
+
+    if _is_multi_part_question(question):
+        return search_results
+    matched = [terms for pattern, terms in _TOPIC_EVIDENCE_RULES if pattern.search(question)]
+    if len(matched) != 1:
+        return search_results
+    terms = matched[0]
+    return [
+        item
+        for item in search_results
+        if any(
+            term in str(item.get(field) or "")
+            for term in terms
+            for field in ("document_name", "heading", "content", "parent_content")
+        )
+    ]
 
 
 def select_evidence(question: str, search_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -56,6 +104,11 @@ def _evidence_table_rows(item: dict[str, Any]) -> list[list[str]]:
 
 def _salary_date_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
     if not re.search(r"工资.*(?:哪天|几号|什么时候).*发|(?:哪天|几号|什么时候).*发工资|发薪日|工资发放日", question):
+        return None
+    # A generic pay-day lookup must never override a more specific departure,
+    # handover or asset-return condition. Those turns need all clauses grounded
+    # together by the answer model.
+    if _CONDITIONAL_SALARY_CONTEXT.search(question):
         return None
     for index, item in enumerate(evidence, start=1):
         units = _evidence_units(item)
@@ -290,10 +343,68 @@ def _expense_cap_answer(question: str, evidence: list[dict[str, Any]]) -> str | 
     return f"{answer} {marker_text}"
 
 
+def _late_duration_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    if "迟到" not in question:
+        return None
+    minute_match = re.search(r"(\d+(?:\.\d+)?)\s*分钟", question)
+    hour_match = re.search(r"(\d+(?:\.\d+)?)\s*小时", question)
+    if not minute_match and not hour_match:
+        return None
+    minutes = float(minute_match.group(1)) if minute_match else float(hour_match.group(1)) * 60
+    duration_label = f"{minutes:g}分钟"
+
+    for index, item in enumerate(evidence, start=1):
+        continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+        if "迟到" not in continuous:
+            continue
+        answer: str | None = None
+        if minutes <= 15:
+            rule = re.search(r"迟到不足15分钟（?含）?的?，?当月第一次口头提醒，?不扣款；?当月第二次起每次扣款30元", continuous)
+            if rule:
+                answer = (
+                    f"迟到 **{duration_label}** 属于“不足15分钟（含）”档位："
+                    "当月第一次口头提醒、不扣款；当月第二次起每次扣款 **30元**。"
+                )
+        elif minutes < 30:
+            rule = re.search(r"迟到超过15分钟不足30分钟的?，?每次扣款50元", continuous)
+            if rule:
+                answer = f"迟到 **{duration_label}** 属于“超过15分钟、不足30分钟”档位，每次扣款 **50元**。"
+        elif minutes == 30:
+            continue
+        elif minutes < 120:
+            rule = re.search(r"迟到超过30分钟不足2小时的?，?按旷工半天处理", continuous)
+            if rule:
+                answer = f"迟到 **{duration_label}** 属于“超过30分钟、不足2小时”档位，按 **旷工半天** 处理。"
+        else:
+            rule = re.search(r"迟到2小时及以上的?，?按旷工一天处理", continuous)
+            if rule:
+                answer = f"迟到 **{duration_label}** 达到“2小时及以上”档位，按 **旷工一天** 处理。"
+        if not answer:
+            continue
+        cumulative = re.search(r"自然月内迟到累计达到3次的?，?无论单次时长，?加记旷工半天，?并取消当月全勤奖", continuous)
+        if cumulative:
+            answer += "另外，自然月内迟到累计达到 **3次**，还会加记旷工半天并取消当月全勤奖。"
+        return f"{answer} [[{index}]]"
+    return None
+
+
 def fast_factual_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
     """Answer narrow, high-confidence structured lookups without an LLM."""
 
-    for resolver in (_salary_date_answer, _eligibility_answer, _difference_answer, _threshold_consequence_answer, _expense_cap_answer):
+    # Every resolver below returns one narrow fact. Let the grounded answerer
+    # synthesize multi-slot questions so a successful first resolver cannot
+    # silently discard the remaining clauses.
+    if _is_multi_part_question(question):
+        return None
+
+    for resolver in (
+        _salary_date_answer,
+        _eligibility_answer,
+        _difference_answer,
+        _threshold_consequence_answer,
+        _expense_cap_answer,
+        _late_duration_answer,
+    ):
         answer = resolver(question, evidence)
         if answer:
             return answer

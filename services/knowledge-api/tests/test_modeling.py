@@ -135,6 +135,129 @@ async def test_direct_topic_follow_up_does_not_get_polluted_by_previous_question
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("previous_question", "question"),
+    [
+        ("工资哪天发？", "我入职半年，年假有几天？"),
+        ("我入职半年，年假有几天？", "新一线城市有哪些？"),
+        ("经理去深圳住酒店650元/晚能不能报？", "虚假报销6000元怎么处理？"),
+        ("经理和总监通讯补贴差多少？", "迟到20分钟怎么算？"),
+        ("迟到20分钟怎么算？", "那工资哪天发？"),
+    ],
+)
+async def test_complete_short_question_starts_a_new_topic_without_model(
+    tmp_path,
+    previous_question: str,
+    question: str,
+) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("主题完整的新问题不应调用改写模型")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    rewritten = await manager.rewrite_query(
+        question,
+        [
+            {"role": "user", "content": previous_question},
+            {"role": "assistant", "content": "上一题的答案。"},
+        ],
+    )
+
+    assert rewritten == question
+    assert "追问：" not in rewritten
+    assert previous_question not in rewritten
+
+
+@pytest.mark.anyio
+async def test_failed_ambiguous_rewrite_never_concatenates_previous_question(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("model unavailable")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    rewritten = await manager.rewrite_query(
+        "继续比较上述标准在审批责任和例外条件方面的差异。",
+        [{"role": "user", "content": "上海普通员工的住宿上限是多少？"}],
+    )
+
+    assert rewritten == "继续比较上述标准在审批责任和例外条件方面的差异。"
+    assert "上海普通员工" not in rewritten
+    assert "追问：" not in rewritten
+
+
+@pytest.mark.anyio
+async def test_fifteen_turn_mixed_topic_sequence_preserves_only_real_follow_ups(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("完整问题和确定性追问不应调用改写模型")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    turns = [
+        ("工资哪天发？", "工资哪天发？"),
+        ("我入职半年，年假有几天？", "我入职半年，年假有几天？"),
+        ("新一线城市有哪些？", "新一线城市有哪些？"),
+        ("是哪16座？", "新一线城市是哪16座？"),
+        ("经理去深圳住酒店650元/晚能不能报？", "经理去深圳住酒店650元/晚能不能报？"),
+        ("虚假报销6000元怎么处理？", "虚假报销6000元怎么处理？"),
+        ("经理和总监通讯补贴差多少？", "经理和总监通讯补贴差多少？"),
+        ("迟到20分钟怎么算？", "迟到20分钟怎么算？"),
+        ("那迟到是怎么规定的？", "迟到问题是怎么规定的？"),
+        ("杭州总部上班时间？", "杭州总部上班时间？"),
+        ("私人U盘能拷文件吗？", "私人U盘能拷文件吗？"),
+        ("司龄6年的年假有几天？", "司龄6年的年假有几天？"),
+        ("什么时候发工资？", "什么时候发工资？"),
+        ("我是实习生，我可以看核心代码仓库吗？", "我是实习生，我可以看核心代码仓库吗？"),
+        ("迟到20分钟怎么算？", "迟到20分钟怎么算？"),
+    ]
+    history: list[dict[str, str]] = []
+    for question, expected in turns:
+        rewritten = await manager.rewrite_query(question, history[-10:])
+        assert rewritten == expected
+        assert "追问：" not in rewritten
+        history.extend(
+            [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": "已依据本地资料回答。"},
+            ]
+        )
+
+
+@pytest.mark.anyio
+async def test_uncertain_turn_uses_dual_retrieval_after_successful_rewrite(tmp_path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        return httpx.Response(200, json={"message": {"content": "上海普通员工住宿标准是多少？"}})
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    plan = await manager.plan_query(
+        "标准是多少？",
+        [{"role": "user", "content": "上海普通员工住宿上限怎么规定？"}],
+        topic_similarity=0.36,
+    )
+
+    assert plan.decision == "uncertain"
+    assert plan.standalone_question == "上海普通员工住宿标准是多少？"
+    assert plan.retrieval_questions == ("标准是多少？", "上海普通员工住宿标准是多少？")
+    assert plan.use_answer_history is False
+
+
+@pytest.mark.anyio
+async def test_low_similarity_uncertain_turn_is_isolated_without_rewrite(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("低相似度主题切换不应调用改写模型")
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    plan = await manager.plan_query(
+        "标准是多少？",
+        [{"role": "user", "content": "通讯补贴有什么规定？"}],
+        topic_similarity=0.12,
+    )
+
+    assert plan.decision == "independent"
+    assert plan.standalone_question == "标准是多少？"
+    assert plan.retrieval_questions == ("标准是多少？",)
+    assert plan.use_answer_history is False
+
+
+@pytest.mark.anyio
 async def test_ollama_answer_is_forwarded_as_native_stream(tmp_path) -> None:
     payloads: list[dict[str, object]] = []
 
@@ -199,6 +322,50 @@ async def test_stream_rejects_raw_context_dump_before_showing_it(tmp_path) -> No
     assert "制度原文" not in content
     assert "9:00" in content
     assert "[[1]]" in content
+
+
+@pytest.mark.anyio
+async def test_multi_part_departure_question_is_synthesized_instead_of_fast_salary_answer(tmp_path) -> None:
+    payloads: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        body = json.dumps({
+            "message": {
+                "content": (
+                    "离职工资在办完手续后的次月15日发放。 [[1]]"
+                    "电脑必须归还，未归还资产可被依法追索。 [[1]]"
+                ),
+            },
+            "done": True,
+        }, ensure_ascii=False) + "\n"
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    answer = await manager.stream(
+        "离职手续没办完，工资什么时候发？电脑不还行吗？",
+        [{
+            "chunk_id": "chunk-1", "document_id": "document-1", "document_name": "员工手册.txt",
+            "format": "TXT", "page": 1, "heading": "离职", "score": 0.95,
+            "evidence_score": 0.95, "updated_at": "2026-08-29T00:00:00Z",
+            "content": (
+                "未归还资产的，公司有权依法追索。"
+                "离职当月工资在办理完离职手续后的次月15日发放。"
+            ),
+        }],
+    )
+    content = "".join([delta async for delta in answer.deltas])
+
+    assert answer.provider == "ollama:qwen3:8b"
+    assert "次月15日" in content
+    assert "电脑必须归还" in content
+    assert len(payloads) == 1
+    system_prompt = payloads[0]["messages"][0]["content"]
+    assert "首句应在40字内" in system_prompt
+    assert "必须按原顺序逐项回答" in system_prompt
 
 
 @pytest.mark.anyio

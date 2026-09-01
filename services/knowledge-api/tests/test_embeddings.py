@@ -31,6 +31,28 @@ def test_ollama_embedding_provider_uses_local_batch_api() -> None:
     assert requests[-1]["model"] == "bge-m3"
 
 
+def test_ollama_embedding_provider_reuses_exact_local_vectors() -> None:
+    requests: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        inputs = json.loads(request.content)["input"]
+        requests.append(inputs)
+        return httpx.Response(200, json={"embeddings": [[float(len(text)), 1.0] for text in inputs]})
+
+    manager = EmbeddingManager(
+        "ollama",
+        base_url="http://127.0.0.1:11434",
+        model="bge-m3",
+        transport=httpx.MockTransport(handler),
+    )
+    first = manager.embed(["重复问题", "另一问题"])
+    repeated = manager.embed(["另一问题", "重复问题", "重复问题"])
+
+    assert repeated == [first[1], first[0], first[0]]
+    assert len(requests) == 2
+    assert requests[-1] == ["重复问题", "另一问题"]
+
+
 def test_auto_embedding_falls_back_without_local_model() -> None:
     manager = EmbeddingManager(
         "auto",
