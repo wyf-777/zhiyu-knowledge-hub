@@ -116,6 +116,8 @@ npm run api:test
 npm run api:eval
 npm run api:eval:gate
 npm run api:eval:bge
+npm run api:eval:experience:fast
+npm run api:eval:experience
 npm run typecheck
 npm run build
 npm run sidecar:build

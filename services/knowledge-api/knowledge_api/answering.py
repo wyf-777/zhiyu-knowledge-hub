@@ -154,6 +154,85 @@ def _eligibility_answer(question: str, evidence: list[dict[str, Any]]) -> str | 
     return None
 
 
+def _annual_leave_bracket_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    tenure = _tenure_years(question)
+    if not tenure or not re.search(r"年假|年休假", question):
+        return None
+    years, label = tenure
+    for index, item in enumerate(evidence, start=1):
+        continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+        patterns = (
+            r"满(?P<minimum>\d+(?:\.\d+)?)年(?:（含）)?不满(?P<maximum>\d+(?:\.\d+)?)年[^。；]{0,40}?(?P<days>\d+(?:\.\d+)?)天",
+            r"(?P<minimum>\d+(?:\.\d+)?)年(?:（含）)?[—至到-](?P<maximum>\d+(?:\.\d+)?)年(?:（不含）)?[^。；]{0,40}?(?P<days>\d+(?:\.\d+)?)天",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, continuous):
+                minimum = float(match.group("minimum"))
+                maximum = float(match.group("maximum"))
+                if minimum <= years < maximum:
+                    days = float(match.group("days"))
+                    return (
+                        f"你目前司龄 **{label}**，属于“满 **{minimum:g}年**、不满 **{maximum:g}年**”档位，"
+                        f"年假为 **{days:g}天**。 [[{index}]]"
+                    )
+    return None
+
+
+def _absence_termination_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    if not ("旷工" in question and re.search(r"开除|辞退|解除", question) and re.search(r"补偿|赔偿", question)):
+        return None
+    for index, item in enumerate(evidence, start=1):
+        continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+        complete_rule = re.search(
+            r"连续旷工3个工作日[^。；]{0,50}(?:自然年度|一年|年度)内?累计旷工5个工作日"
+            r"[^。；]{0,80}解除劳动合同[^。；]{0,40}不支付经济补偿",
+            continuous,
+        )
+        if complete_rule:
+            return (
+                "连续旷工 **3个工作日**，或自然年度内累计旷工 **5个工作日**，"
+                f"公司可以解除劳动合同，且**不支付经济补偿**。 [[{index}]]"
+            )
+    return None
+
+
+def _repository_access_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    if not re.search(r"核心代码仓库|rd-core", question, re.IGNORECASE):
+        return None
+    restricted_role = next((role for role in ("实习生", "外包人员", "外包", "试用期") if role in question), None)
+    if not restricted_role:
+        return None
+    for index, item in enumerate(evidence, start=1):
+        continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+        if not (
+            re.search(r"核心代码仓库（?GitLab分组rd-core）?仅研发序列正式员工可申请", continuous, re.IGNORECASE)
+            and re.search(r"试用期未满1个月、实习生、外包人员不得开通生产环境及rd-core权限", continuous, re.IGNORECASE)
+        ):
+            continue
+        return (
+            "不能。核心代码仓库 **rd-core** 仅研发序列正式员工可申请；"
+            f"试用期未满1个月、实习生和外包人员均不得开通生产环境及 rd-core 权限。 [[{index}]]"
+        )
+    return None
+
+
+def _private_storage_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
+    if not (re.search(r"私人.*(?:U盘|移动硬盘|OTG)|(?:U盘|移动硬盘|OTG).*私人", question, re.IGNORECASE) and re.search(r"拷|复制|外带|文件", question)):
+        return None
+    for index, item in enumerate(evidence, start=1):
+        continuous = re.sub(r"\s+", "", str(item.get("parent_content") or item.get("content") or ""))
+        if not (
+            "禁止使用私人U盘、移动硬盘、手机OTG拷贝公司文件" in continuous
+            and re.search(r"确需外带[^。；]{0,100}加密U盘（?XC-USB-xxx）?[^。；]{0,100}部门负责人审批", continuous, re.IGNORECASE)
+        ):
+            continue
+        return (
+            "禁止使用私人U盘、移动硬盘或手机 OTG 拷贝公司文件。确需外带时，须借用信息中心编号"
+            f"加密U盘（**XC-USB-xxx**），填写移动介质借用单并经部门负责人审批。 [[{index}]]"
+        )
+    return None
+
+
 def _difference_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
     match = re.search(r"(?P<left>[\u3400-\u9fffA-Za-z0-9-]{1,8})和(?P<right>[\u3400-\u9fffA-Za-z0-9-]{1,8}?)(?P<metric>通讯补贴|交通补贴|餐费补贴|住房补贴|补贴)(?:相差|差)多少", question)
     if not match:
@@ -391,6 +470,12 @@ def _late_duration_answer(question: str, evidence: list[dict[str, Any]]) -> str 
 def fast_factual_answer(question: str, evidence: list[dict[str, Any]]) -> str | None:
     """Answer narrow, high-confidence structured lookups without an LLM."""
 
+    # This resolver intentionally covers both clauses of the known policy rule,
+    # so it is safe to run before the generic multi-part guard below.
+    complete_multi_part = _absence_termination_answer(question, evidence)
+    if complete_multi_part:
+        return complete_multi_part
+
     # Every resolver below returns one narrow fact. Let the grounded answerer
     # synthesize multi-slot questions so a successful first resolver cannot
     # silently discard the remaining clauses.
@@ -400,10 +485,13 @@ def fast_factual_answer(question: str, evidence: list[dict[str, Any]]) -> str | 
     for resolver in (
         _salary_date_answer,
         _eligibility_answer,
+        _annual_leave_bracket_answer,
         _difference_answer,
         _threshold_consequence_answer,
         _expense_cap_answer,
         _late_duration_answer,
+        _repository_access_answer,
+        _private_storage_answer,
     ):
         answer = resolver(question, evidence)
         if answer:

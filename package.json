@@ -13,6 +13,8 @@
     "api:eval": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_retrieval_eval.py",
     "api:eval:gate": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_retrieval_eval.py --min-recall 0.95 --min-mrr 0.95 --min-chunk-mrr 0.95 --min-answerability 1.0",
     "api:eval:bge": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_retrieval_eval.py --embedding-provider ollama --embedding-model bge-m3",
+    "api:eval:experience:fast": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_experience_eval.py --mode retrieval --summary --fail-on-error",
+    "api:eval:experience": "node scripts/run-python.mjs services/knowledge-api/evaluation/run_experience_eval.py --mode all --summary --fail-on-error",
     "sidecar:build": "node scripts/run-python.mjs scripts/build_sidecar.py",
     "sidecar:smoke": "node scripts/run-python.mjs scripts/smoke_sidecar.py",
     "desktop:dev": "npm run sidecar:build && tauri dev",

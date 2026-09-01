@@ -207,6 +207,68 @@ def test_half_year_tenure_is_below_leave_eligibility_threshold() -> None:
     assert "满 1年" in answer
 
 
+def test_annual_leave_answer_includes_the_matching_tenure_bracket() -> None:
+    evidence = [{
+        "content": "|满5年不满10年|10天|",
+        "parent_content": "|司龄档位|年假天数|\n|---|---|\n|满1年不满5年|5天|\n|满5年不满10年|10天|",
+    }]
+
+    answer = fast_factual_answer("司龄6年的年假有几天？", evidence)
+
+    assert answer is not None
+    assert "满 **5年**" in answer and "不满 **10年**" in answer
+    assert "10天" in answer
+
+
+def test_absence_termination_answer_keeps_both_thresholds_and_compensation() -> None:
+    evidence = [{
+        "content": "连续旷工3个工作日，或自然年度内累计旷工5个工作日的，公司可解除劳动合同。",
+        "parent_content": (
+            "连续旷工3个工作日，或自然年度内累计旷工5个工作日的，"
+            "公司可依据劳动合同法解除劳动合同，不支付经济补偿。"
+        ),
+    }]
+
+    answer = fast_factual_answer("连续旷工几天可以开除？有没有补偿？", evidence)
+
+    assert answer is not None
+    assert "3个工作日" in answer and "5个工作日" in answer
+    assert "不支付经济补偿" in answer
+
+
+def test_repository_access_answer_does_not_confuse_repository_with_production_only() -> None:
+    evidence = [{
+        "content": "核心代码仓库仅研发正式员工可申请。",
+        "parent_content": (
+            "核心代码仓库（GitLab分组rd-core）仅研发序列正式员工可申请，"
+            "试用期未满1个月、实习生、外包人员不得开通生产环境及rd-core权限。"
+        ),
+    }]
+
+    answer = fast_factual_answer("我是实习生，我可以看核心代码仓库吗？", evidence)
+
+    assert answer is not None
+    assert "不能" in answer and "rd-core" in answer
+    assert "研发序列正式员工" in answer and "实习生" in answer
+
+
+def test_private_storage_answer_keeps_the_approved_encrypted_drive_exception() -> None:
+    evidence = [{
+        "content": "禁止使用私人U盘、移动硬盘、手机OTG拷贝公司文件。",
+        "parent_content": (
+            "禁止使用私人U盘、移动硬盘、手机OTG拷贝公司文件。"
+            "因现场实施确需外带的，须借用信息中心编号加密U盘（XC-USB-xxx），"
+            "填写《移动介质借用单》，部门负责人审批，归还时进行杀毒与审计。"
+        ),
+    }]
+
+    answer = fast_factual_answer("私人U盘能拷文件吗？", evidence)
+
+    assert answer is not None
+    assert "禁止" in answer and "加密U盘" in answer
+    assert "XC-USB-xxx" in answer and "部门负责人审批" in answer
+
+
 def test_allowance_difference_is_calculated_from_two_table_rows() -> None:
     evidence = [{
         "content": "|职级|通讯补贴|\n|经理|200元|\n|总监|400元|",
