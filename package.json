@@ -17,6 +17,7 @@
     "sidecar:smoke": "node scripts/run-python.mjs scripts/smoke_sidecar.py",
     "desktop:dev": "npm run sidecar:build && tauri dev",
     "desktop:build": "npm run sidecar:build && tauri build",
+    "desktop:bundle": "tauri build",
     "desktop:check": "cargo check --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {

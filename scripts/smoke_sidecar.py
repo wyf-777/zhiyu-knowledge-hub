@@ -124,8 +124,26 @@ def main() -> None:
     base_url = f"http://127.0.0.1:{port}"
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     with tempfile.TemporaryDirectory(prefix="zhiyu-sidecar-smoke-") as data_dir:
+        # Keep the packaging smoke test deterministic on clean CI runners.
+        # Product defaults still use auto-detected Ollama/qwen3:8b and bge-m3;
+        # this isolated temporary profile only validates the bundled local API.
+        Path(data_dir, "model-settings.json").write_text(
+            json.dumps({
+                "provider": "extractive",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "qwen3:8b",
+                "timeout_seconds": 90,
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
         process = subprocess.Popen(
-            [str(executable), "--port", str(port), "--token", token, "--data-dir", data_dir],
+            [
+                str(executable),
+                "--port", str(port),
+                "--token", token,
+                "--data-dir", data_dir,
+                "--embedding-provider", "hashing",
+            ],
             cwd=ROOT,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -138,9 +156,9 @@ def main() -> None:
                 runtime = client.get("/api/v1/runtime/status", headers=headers)
                 runtime.raise_for_status()
                 runtime_data = runtime.json()
-                assert runtime_data["model"]["model"] == "qwen3:8b"
-                assert runtime_data["model"]["state"] == "ready"
-                assert runtime_data["embedding"]["model_id"] == "ollama:bge-m3"
+                assert runtime_data["model"]["provider"] == "extractive"
+                assert runtime_data["model"]["state"] == "extractive"
+                assert runtime_data["embedding"]["model_id"] == "hashing-vector-v1"
                 assert runtime_data["embedding"]["state"] == "ready"
                 assert runtime_data["ocr"]["state"] == "ready"
 
@@ -177,7 +195,7 @@ def main() -> None:
                 chat.raise_for_status()
                 events = [json.loads(line) for line in chat.text.splitlines()]
                 start = next(event for event in events if event["event"] == "message.start")
-                assert start["provider"] == "ollama:qwen3:8b"
+                assert start["provider"] == "extractive-local-v1"
                 assert any(event["event"] == "citation" for event in events)
                 assert events[-1]["event"] == "message.completed"
 

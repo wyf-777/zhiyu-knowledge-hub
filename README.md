@@ -119,10 +119,12 @@ npm run api:eval:bge
 npm run typecheck
 npm run build
 npm run sidecar:build
+npm run sidecar:smoke
 npm run desktop:check
+npm run desktop:build
 ```
 
-Windows 由 Tauri 使用无控制台窗口模式启动应用与 Sidecar；macOS 使用相同的 React、FastAPI、API 协议和业务源码，由 CI 在 `macos-14` 环境生成对应平台 Sidecar 并检查桌面构建。
+Windows 由 Tauri 使用无控制台窗口模式启动应用与 Sidecar；macOS 使用相同的 React、FastAPI、API 协议和业务源码。跨平台 CI 会分别在 `windows-latest` 与 `macos-14` 上构建并冒烟验证当前平台 Sidecar，执行真实 Tauri bundle 构建，并保留 Windows MSI/NSIS 与 macOS DMG/App 构建产物。macOS 对外分发前仍需配置 Apple Developer 签名与公证凭据。
 
 ## 总体架构
 
