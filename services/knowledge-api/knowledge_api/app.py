@@ -8,7 +8,7 @@ from dataclasses import asdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
@@ -19,6 +19,7 @@ import httpx
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__
+from .data_reliability import BackupManager, BackupValidationError
 from .embeddings import EmbeddingManager, EmbeddingProviderName
 from .ingestion import DocumentProcessor
 from .retrieval_planning import build_retrieval_queries
@@ -29,6 +30,7 @@ from .storage import KnowledgeStore
 
 PROTOCOL_VERSION = "1"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_BACKUP_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024
 ALLOWED_EXTENSIONS = {
     ".pdf": "pdf", ".docx": "docx", ".xls": "xls", ".xlsx": "xlsx", ".pptx": "pptx",
     ".html": "html", ".htm": "html", ".txt": "txt", ".md": "md", ".markdown": "md",
@@ -63,6 +65,46 @@ class ModelSettingsRequest(BaseModel):
     timeout_seconds: int = Field(default=90, ge=10, le=300)
 
 
+class ConversationCreateRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=160)
+    knowledge_base_id: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1, max_length=300)
+    pinned: bool = False
+
+
+class ConversationUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    pinned: bool | None = None
+
+
+class PersistedChatMessage(BaseModel):
+    id: str = Field(min_length=1, max_length=160)
+    role: Literal["user", "assistant"]
+    content: str = Field(default="", max_length=100_000)
+    time: str = Field(default="", max_length=40)
+    citations: list[dict[str, Any]] | None = Field(default=None, max_length=100)
+    suggestions: list[str] | None = Field(default=None, max_length=30)
+    status: Literal["complete", "streaming", "stopped", "no-evidence", "error"] | None = None
+    feedback: Literal["helpful", "unhelpful"] | None = None
+
+
+class ConversationMessagesRequest(BaseModel):
+    items: list[PersistedChatMessage] = Field(default_factory=list, max_length=5000)
+
+
+class LegacyConversation(BaseModel):
+    id: str = Field(min_length=1, max_length=160)
+    knowledge_base_id: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1, max_length=300)
+    pinned: bool = False
+
+
+class LegacyConversationImportRequest(BaseModel):
+    import_id: str = Field(min_length=1, max_length=200)
+    conversations: list[LegacyConversation] = Field(default_factory=list, max_length=5000)
+    messages: dict[str, list[PersistedChatMessage]] = Field(default_factory=dict)
+
+
 def api_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
 
@@ -85,6 +127,7 @@ def create_app(
         raise ValueError("runtime_token must not be empty")
 
     store = KnowledgeStore(data_dir or Path(gettempdir()) / "zhiyu-knowledge-api")
+    backup_manager = BackupManager(store)
     embedding_manager = EmbeddingManager(
         default_embedding_provider,
         base_url=embedding_base_url,
@@ -97,6 +140,7 @@ def create_app(
     app = FastAPI(title="Zhiyu Knowledge API", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime_token = runtime_token
     app.state.store = store
+    app.state.backup_manager = backup_manager
     app.state.processor = processor
     app.state.embedding_manager = embedding_manager
     app.state.reranker_manager = reranker_manager
@@ -175,6 +219,138 @@ def create_app(
     @app.get("/api/v1/knowledge-bases")
     async def list_knowledge_bases() -> dict[str, object]:
         return {"items": store.list_knowledge_bases()}
+
+    @app.get("/api/v1/conversations")
+    async def list_conversations(knowledge_base_id: str | None = None) -> dict[str, object]:
+        if knowledge_base_id and not store.get_knowledge_base(knowledge_base_id):
+            raise api_error(404, "KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在。")
+        return {"items": store.list_conversations(knowledge_base_id)}
+
+    @app.post("/api/v1/conversations", status_code=201)
+    async def create_conversation(payload: ConversationCreateRequest) -> dict[str, object]:
+        if not store.get_knowledge_base(payload.knowledge_base_id):
+            raise api_error(404, "KNOWLEDGE_BASE_NOT_FOUND", "知识库不存在。")
+        return {
+            "conversation": store.create_conversation(
+                conversation_id=payload.id,
+                knowledge_base_id=payload.knowledge_base_id,
+                title=payload.title,
+                pinned=payload.pinned,
+            )
+        }
+
+    @app.put("/api/v1/conversations/{conversation_id}")
+    async def update_conversation(conversation_id: str, payload: ConversationUpdateRequest) -> dict[str, object]:
+        conversation = store.update_conversation(conversation_id, title=payload.title, pinned=payload.pinned)
+        if not conversation:
+            raise api_error(404, "CONVERSATION_NOT_FOUND", "对话不存在。")
+        return {"conversation": conversation}
+
+    @app.delete("/api/v1/conversations/{conversation_id}", status_code=204)
+    async def delete_conversation(conversation_id: str) -> Response:
+        if not store.delete_conversation(conversation_id):
+            raise api_error(404, "CONVERSATION_NOT_FOUND", "对话不存在。")
+        return Response(status_code=204)
+
+    @app.get("/api/v1/conversations/{conversation_id}/messages")
+    async def list_conversation_messages(conversation_id: str) -> dict[str, object]:
+        if not store.get_conversation(conversation_id):
+            raise api_error(404, "CONVERSATION_NOT_FOUND", "对话不存在。")
+        return {"items": store.list_conversation_messages(conversation_id)}
+
+    @app.put("/api/v1/conversations/{conversation_id}/messages")
+    async def replace_conversation_messages(conversation_id: str, payload: ConversationMessagesRequest) -> dict[str, object]:
+        try:
+            items = store.replace_conversation_messages(conversation_id, [item.model_dump() for item in payload.items])
+        except ValueError:
+            raise api_error(404, "CONVERSATION_NOT_FOUND", "对话不存在。") from None
+        return {"items": items}
+
+    @app.post("/api/v1/conversations/import", status_code=200)
+    async def import_legacy_conversations(payload: LegacyConversationImportRequest) -> dict[str, object]:
+        try:
+            result = store.import_legacy_conversations(
+                import_id=payload.import_id,
+                conversations=[
+                    {
+                        "id": item.id,
+                        "knowledge_base_id": item.knowledge_base_id,
+                        "title": item.title,
+                        "pinned": item.pinned,
+                    }
+                    for item in payload.conversations
+                ],
+                messages_by_conversation={
+                    conversation_id: [message.model_dump() for message in messages]
+                    for conversation_id, messages in payload.messages.items()
+                },
+            )
+        except ValueError as error:
+            raise api_error(400, "LEGACY_IMPORT_INVALID", str(error)) from None
+        return result
+
+    @app.get("/api/v1/storage/status")
+    async def storage_status() -> dict[str, object]:
+        return {
+            "schema": store.schema_status(),
+            "data_directory": str(store.data_dir),
+            "backup_directory": str(store.backups_dir),
+            "conversation_count": len(store.list_conversations()),
+        }
+
+    @app.get("/api/v1/storage/backups")
+    async def list_backups() -> dict[str, object]:
+        return {"items": await run_in_threadpool(backup_manager.list_backups)}
+
+    @app.post("/api/v1/storage/backups", status_code=201)
+    async def create_backup() -> dict[str, object]:
+        try:
+            backup = await run_in_threadpool(backup_manager.create_backup)
+        except RuntimeError as error:
+            raise api_error(409, "BACKUP_BUSY", str(error)) from None
+        except (BackupValidationError, OSError) as error:
+            raise api_error(500, "BACKUP_FAILED", str(error)) from None
+        return {"backup": backup}
+
+    @app.post("/api/v1/storage/backups/import", status_code=201)
+    async def import_backup(backup: Annotated[UploadFile, File(description="知域本地备份")]) -> dict[str, object]:
+        temporary = store.data_dir / f".backup-upload-{uuid4().hex}.tmp"
+        total = 0
+        try:
+            with temporary.open("wb") as output:
+                while chunk := await backup.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > MAX_BACKUP_UPLOAD_BYTES:
+                        raise api_error(413, "BACKUP_TOO_LARGE", "备份文件超过20GB安全限制。")
+                    output.write(chunk)
+            item = await run_in_threadpool(backup_manager.import_backup, temporary)
+            return {"backup": item}
+        except BackupValidationError as error:
+            raise api_error(400, "BACKUP_INVALID", str(error)) from None
+        finally:
+            await backup.close()
+            temporary.unlink(missing_ok=True)
+
+    @app.post("/api/v1/storage/backups/{backup_id}/restore")
+    async def restore_backup(backup_id: str) -> dict[str, object]:
+        try:
+            return await run_in_threadpool(backup_manager.restore_backup, backup_id)
+        except FileNotFoundError:
+            raise api_error(404, "BACKUP_NOT_FOUND", "备份不存在。") from None
+        except RuntimeError as error:
+            raise api_error(409, "RESTORE_BUSY", str(error)) from None
+        except BackupValidationError as error:
+            raise api_error(400, "BACKUP_INVALID", str(error)) from None
+        except OSError as error:
+            raise api_error(500, "RESTORE_FAILED", f"恢复失败，原数据已保留：{error}") from None
+
+    @app.post("/api/v1/storage/backups/open-folder")
+    async def open_backup_folder() -> dict[str, str]:
+        try:
+            document_opener(store.backups_dir)
+        except OSError as error:
+            raise api_error(500, "BACKUP_FOLDER_OPEN_FAILED", f"无法打开备份目录：{error}") from None
+        return {"status": "opened"}
 
     @app.get("/api/v1/knowledge-bases/{knowledge_base_id}/documents")
     async def list_documents(knowledge_base_id: str) -> dict[str, object]:

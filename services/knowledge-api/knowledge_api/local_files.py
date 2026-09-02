@@ -14,3 +14,8 @@ def open_local_document(path: Path) -> None:
         return
     command = ["open", str(resolved)] if sys.platform == "darwin" else ["xdg-open", str(resolved)]
     subprocess.Popen(command, close_fds=True)  # noqa: S603
+
+
+def open_local_directory(path: Path) -> None:
+    """Open an application-owned directory without exposing arbitrary path input."""
+    open_local_document(path)

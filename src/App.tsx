@@ -65,8 +65,10 @@ export default function App() {
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState('');
   const [notice, setNotice] = useState('');
+  const [conversationPersistenceReady, setConversationPersistenceReady] = useState(!desktopRuntime);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const conversationHydrationStartedRef = useRef(false);
 
   const applyModelStatus = useCallback((model: LocalModelStatus) => {
     setRuntimeStatus((current) => ({
@@ -85,8 +87,9 @@ export default function App() {
   }, [sidebarCollapsed]);
 
   useEffect(() => {
+    if (desktopRuntime) return;
     localStorage.setItem('zhiyu-conversations', JSON.stringify(conversationItems));
-  }, [conversationItems]);
+  }, [conversationItems, desktopRuntime]);
 
   useEffect(() => {
     if (!selectedConversationId) return;
@@ -94,11 +97,56 @@ export default function App() {
   }, [messages, selectedConversationId]);
 
   useEffect(() => {
+    if (desktopRuntime) return;
     const timer = window.setTimeout(() => {
       localStorage.setItem('zhiyu-conversation-messages', JSON.stringify(conversationMessageItems));
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [conversationMessageItems]);
+  }, [conversationMessageItems, desktopRuntime]);
+
+  useEffect(() => {
+    if (!desktopRuntime || runtimeStatus.phase !== 'running' || conversationPersistenceReady || conversationHydrationStartedRef.current) return;
+    conversationHydrationStartedRef.current = true;
+    let active = true;
+    const hydrate = async () => {
+      try {
+        const legacyConversations = readLocalValue<Conversation[]>('zhiyu-conversations', []);
+        const legacyMessages = readLocalValue<Record<string, ChatMessage[]>>('zhiyu-conversation-messages', {});
+        if (legacyConversations.length > 0) {
+          await knowledgeApiService.importLegacyConversations(runtimeStatus, legacyConversations, legacyMessages);
+        }
+        const persisted = await knowledgeApiService.listConversations(runtimeStatus);
+        if (!active) return;
+        setConversationItems(persisted.conversations);
+        setConversationMessageItems(persisted.messages);
+        const first = persisted.conversations.find((item) => item.knowledgeBaseId === selectedKnowledgeBaseId);
+        setSelectedConversationId(first?.id ?? null);
+        setMessages(first ? persisted.messages[first.id] ?? [] : []);
+        setConversationPersistenceReady(true);
+        localStorage.setItem('zhiyu-sqlite-conversation-migration-v1', JSON.stringify({ completedAt: new Date().toISOString(), imported: legacyConversations.length }));
+      } catch (error) {
+        conversationHydrationStartedRef.current = false;
+        if (active) setNotice(error instanceof Error ? `历史对话加载失败：${error.message}` : '历史对话加载失败');
+      }
+    };
+    void hydrate();
+    return () => { active = false; };
+  }, [conversationPersistenceReady, desktopRuntime, runtimeStatus.phase, runtimeStatus.baseUrl, runtimeStatus.token]);
+
+  useEffect(() => {
+    if (!desktopRuntime || !conversationPersistenceReady || runtimeStatus.phase !== 'running' || !selectedConversationId) return;
+    const persist = () => {
+      void knowledgeApiService.replaceConversationMessages(runtimeStatus, selectedConversationId, messages).catch((error) => {
+        setNotice(error instanceof Error ? `对话保存失败：${error.message}` : '对话保存失败');
+      });
+    };
+    if (!isGenerating) {
+      persist();
+      return;
+    }
+    const timer = window.setTimeout(persist, 650);
+    return () => window.clearTimeout(timer);
+  }, [conversationPersistenceReady, desktopRuntime, isGenerating, messages, runtimeStatus.phase, runtimeStatus.baseUrl, runtimeStatus.token, selectedConversationId]);
 
   useEffect(() => {
     const closeTransientLayers = (event: KeyboardEvent) => {
@@ -300,6 +348,10 @@ export default function App() {
       setServiceError(true);
       return;
     }
+    if (desktopRuntime && !conversationPersistenceReady) {
+      setNotice('正在加载本地历史对话，请稍后再发送');
+      return;
+    }
     setServiceError(false);
     setComposerValue('');
     setIsGenerating(true);
@@ -320,15 +372,27 @@ export default function App() {
       historySource = lastUserIndex >= 0 ? historySource.slice(0, lastUserIndex) : historySource;
     }
     const history = historySource.slice(-10).map(({ role, content }) => ({ role, content }));
-    setMessages((current) => [...current, ...(appendUserMessage ? [userMessage] : []), assistantMessage]);
-
     let conversationId = selectedConversationId;
     if (appendUserMessage && !selectedConversationId) {
       const id = `conversation-${Date.now()}`;
-      setConversationItems((current) => [{ id, knowledgeBaseId: selectedKnowledgeBaseId, title: question, updatedAt: time }, ...current]);
+      const conversation: Conversation = { id, knowledgeBaseId: selectedKnowledgeBaseId, title: question, updatedAt: time };
+      setConversationItems((current) => [conversation, ...current]);
       setSelectedConversationId(id);
       conversationId = id;
+      if (desktopRuntime) {
+        try {
+          await knowledgeApiService.createConversation(runtimeStatus, conversation);
+        } catch (error) {
+          setConversationItems((current) => current.filter((item) => item.id !== id));
+          setSelectedConversationId(null);
+          setComposerValue(question);
+          setIsGenerating(false);
+          setNotice(error instanceof Error ? `无法创建本地对话：${error.message}` : '无法创建本地对话');
+          return;
+        }
+      }
     }
+    setMessages((current) => [...current, ...(appendUserMessage ? [userMessage] : []), assistantMessage]);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -435,6 +499,52 @@ export default function App() {
     } : item));
   };
 
+  const renameConversation = async (id: string, title: string) => {
+    const previous = conversationItems.find((item) => item.id === id);
+    setConversationItems((current) => current.map((item) => item.id === id ? { ...item, title } : item));
+    if (!desktopRuntime || runtimeStatus.phase !== 'running') return;
+    try {
+      await knowledgeApiService.updateConversation(runtimeStatus, id, { title });
+    } catch (error) {
+      if (previous) setConversationItems((current) => current.map((item) => item.id === id ? previous : item));
+      setNotice(error instanceof Error ? `重命名失败：${error.message}` : '重命名失败');
+    }
+  };
+
+  const toggleConversationPin = async (id: string) => {
+    const previous = conversationItems.find((item) => item.id === id);
+    if (!previous) return;
+    const pinned = !previous.pinned;
+    setConversationItems((current) => current.map((item) => item.id === id ? { ...item, pinned } : item));
+    if (!desktopRuntime || runtimeStatus.phase !== 'running') return;
+    try {
+      await knowledgeApiService.updateConversation(runtimeStatus, id, { pinned });
+    } catch (error) {
+      setConversationItems((current) => current.map((item) => item.id === id ? previous : item));
+      setNotice(error instanceof Error ? `置顶状态保存失败：${error.message}` : '置顶状态保存失败');
+    }
+  };
+
+  const deleteConversation = async (id: string) => {
+    const target = conversationItems.find((item) => item.id === id);
+    if (!target || !window.confirm(`确定删除对话“${target.title}”吗？此操作只删除聊天记录，不会删除知识库文档。`)) return;
+    if (desktopRuntime && runtimeStatus.phase === 'running') {
+      try {
+        await knowledgeApiService.deleteConversation(runtimeStatus, id);
+      } catch (error) {
+        setNotice(error instanceof Error ? `删除失败：${error.message}` : '删除失败');
+        return;
+      }
+    }
+    setConversationItems((current) => current.filter((item) => item.id !== id));
+    setConversationMessageItems((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    if (selectedConversationId === id) startNewConversation();
+  };
+
   const activeTasks = tasks.filter((task) => task.status === 'running' || task.status === 'waiting');
   const taskProgress = activeTasks.length
     ? Math.round(activeTasks.reduce((total, task) => total + task.progress, 0) / activeTasks.length)
@@ -461,6 +571,7 @@ export default function App() {
           onBack={() => setSettingsOpen(false)}
           runtimeStatus={runtimeStatus}
           onModelStatusChange={applyModelStatus}
+          onDataRestored={() => window.location.reload()}
         />
       ) : documentsOpen ? (
         <DocumentManagementPage
@@ -488,17 +599,9 @@ export default function App() {
             onNewConversation={startNewConversation}
             onSelectKnowledgeBase={selectKnowledgeBase}
             onSelectConversation={selectConversation}
-            onRenameConversation={(id, title) => setConversationItems((current) => current.map((item) => item.id === id ? { ...item, title } : item))}
-            onPinConversation={(id) => setConversationItems((current) => current.map((item) => item.id === id ? { ...item, pinned: !item.pinned } : item))}
-            onDeleteConversation={(id) => {
-              setConversationItems((current) => current.filter((item) => item.id !== id));
-              setConversationMessageItems((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              if (selectedConversationId === id) startNewConversation();
-            }}
+            onRenameConversation={(id, title) => void renameConversation(id, title)}
+            onPinConversation={(id) => void toggleConversationPin(id)}
+            onDeleteConversation={(id) => void deleteConversation(id)}
             onOpenSettings={openSettings}
             onOpenDocumentManager={openDocumentManager}
           />

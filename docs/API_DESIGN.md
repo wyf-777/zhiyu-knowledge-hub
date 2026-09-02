@@ -43,11 +43,9 @@ Authorization: Bearer <ephemeral-token>
 
 ```text
 GET    /api/v1/knowledge-bases
-POST   /api/v1/knowledge-bases
-GET    /api/v1/knowledge-bases/{id}
-PATCH  /api/v1/knowledge-bases/{id}
-DELETE /api/v1/knowledge-bases/{id}
 ```
+
+当前单机版提供知识库列表；创建、详情、重命名、归档和删除属于下一阶段生命周期 API，尚未对外暴露。
 
 创建请求示例：
 
@@ -65,9 +63,7 @@ DELETE /api/v1/knowledge-bases/{id}
 ```text
 POST   /api/v1/knowledge-bases/{id}/documents
 GET    /api/v1/knowledge-bases/{id}/documents
-GET    /api/v1/documents/{id}
 DELETE /api/v1/documents/{id}
-POST   /api/v1/documents/{id}/reindex
 POST   /api/v1/documents/{id}/retry
 POST   /api/v1/knowledge-bases/{id}/reindex
 GET    /api/v1/documents/{document_id}/chunks/{chunk_id}/preview
@@ -84,11 +80,11 @@ GET    /api/v1/documents/{document_id}/chunks/{chunk_id}/preview
 ```text
 GET  /api/v1/jobs
 GET  /api/v1/jobs/{id}
-POST /api/v1/jobs/{id}/cancel
-GET  /api/v1/events
 ```
 
-任务进度通过 SSE 或 WebSocket 推送。事件示例：
+任务取消、持久化调度器和事件推送尚未实现；当前进度由桌面端轮询持久化任务记录。
+
+后续持久化调度器的目标事件推送格式如下：
 
 ```json
 {
@@ -99,6 +95,33 @@ GET  /api/v1/events
   "message": "正在生成向量 340/500"
 }
 ```
+
+### 4.4 会话与消息
+
+```text
+GET    /api/v1/conversations
+POST   /api/v1/conversations
+PUT    /api/v1/conversations/{id}
+DELETE /api/v1/conversations/{id}
+GET    /api/v1/conversations/{id}/messages
+PUT    /api/v1/conversations/{id}/messages
+POST   /api/v1/conversations/import
+```
+
+桌面版会在首次升级时将 `zhiyu-conversations` 与 `zhiyu-conversation-messages` 幂等导入 SQLite。导入事务使用固定 `import_id` 防止重复执行；旧 localStorage 数据保留为迁移安全副本，但不再作为桌面版运行时数据源。
+
+### 4.5 存储、备份与恢复
+
+```text
+GET  /api/v1/storage/status
+GET  /api/v1/storage/backups
+POST /api/v1/storage/backups
+POST /api/v1/storage/backups/import
+POST /api/v1/storage/backups/{id}/restore
+POST /api/v1/storage/backups/open-folder
+```
+
+`.zhiyu-backup` 包含数据库、原始文档和带 SHA-256 的版本化清单。恢复前检查路径穿越、条目数量、解压体积、文件大小、哈希、SQLite `quick_check`、数据表、schema 版本和文档完整性；真正替换前自动创建 `pre-restore` 安全备份，失败时回滚原数据库与文档目录。
 
 ### 4.4 检索
 

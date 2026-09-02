@@ -71,7 +71,7 @@
 
 向量本体由 VectorStore 保存，使用 `chunk_id`、`tenant_id`、`knowledge_base_id`、`document_id` 和版本作为过滤字段。
 
-当前单机 SQLite schema 版本为 `4`。现有 `chunks` 表使用 `page_start`、`heading`、`content_kind`、`parent_chunk_id`、`parent_content` 和 `location_json`；`location_json` 可保存 `pdf-bbox`、`pdf-page`、`slide` 或 `worksheet`。父 ID 由文档 ID 与父窗口序号稳定派生，同一父窗口内的多个子块共享父 ID。当前向量仍以内嵌 JSON 保存，外部 VectorStore 是企业规模化阶段的替换目标。
+当前单机 SQLite schema 版本为 `5`。现有 `chunks` 表使用 `page_start`、`heading`、`content_kind`、`parent_chunk_id`、`parent_content` 和 `location_json`；`location_json` 可保存 `pdf-bbox`、`pdf-page`、`slide` 或 `worksheet`。父 ID 由文档 ID 与父窗口序号稳定派生，同一父窗口内的多个子块共享父 ID。当前向量仍以内嵌 JSON 保存，外部 VectorStore 是企业规模化阶段的替换目标。
 
 ### 2.5 ingestion_jobs
 
@@ -91,7 +91,7 @@
 
 ### 2.6 conversations 与 messages
 
-对话记录和知识库数据分开。消息记录包含角色、正文、模型、token 使用量和时间。助手消息的引用通过 `message_citations` 关联到确定的 `chunk_id` 与文档版本，避免索引更新后引用失去依据。
+单机版从 schema v5 起将对话和消息持久化到 `conversations` 与 `conversation_messages`。消息按 `position` 保序，保存角色、正文、显示时间、状态、反馈、推荐追问和引用快照；删除对话通过外键级联删除消息。`data_imports` 记录 localStorage 迁移批次，保证首次升级可重复调用但只导入一次。企业版后续可将引用快照规范化为 `message_citations` 并关联确定的文档版本。
 
 ### 2.7 permissions
 
@@ -127,7 +127,7 @@ pending → running → succeeded
 ## 5. 迁移与兼容
 
 - 每个数据库包含 `schema_version`。
-- 当前迁移目标版本为 `4`，旧库启动时以幂等加列方式补齐父块和位置字段。
-- 应用升级前自动创建数据库备份。
+- 当前迁移目标版本为 `5`；`schema_migrations` 记录已执行版本，v5 增加会话、消息与幂等导入表。
+- 检测到旧版数据库时，应用会先使用 SQLite Online Backup 创建 `pre-upgrade` 快照；迁移失败时恢复快照并终止启动。
 - 迁移脚本必须可重复检测、不可重复执行。
 - 向量索引格式、Embedding 模型或标准化规则变化时，使用索引版本而不是原地覆盖。

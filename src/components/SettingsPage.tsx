@@ -17,6 +17,7 @@ import type { LocalModelStatus } from '../services/KnowledgeApiService';
 import type { RuntimeStatus } from '../services/RuntimeService';
 import { ModelSettingsPanel } from './ModelSettingsPanel';
 import { RetrievalSettingsPanel } from './RetrievalSettingsPanel';
+import { StorageSettingsPanel } from './StorageSettingsPanel';
 import { ThemeSwitcher } from './ThemeSwitcher';
 
 type SettingsSectionId = 'general' | 'appearance' | 'shortcuts' | 'models' | 'retrieval' | 'storage' | 'privacy' | 'about';
@@ -65,9 +66,10 @@ interface SettingsPageProps {
   onBack: () => void;
   runtimeStatus: RuntimeStatus;
   onModelStatusChange: (status: LocalModelStatus) => void;
+  onDataRestored: () => void;
 }
 
-export function SettingsPage({ theme, onThemeChange, onBack, runtimeStatus, onModelStatusChange }: SettingsPageProps) {
+export function SettingsPage({ theme, onThemeChange, onBack, runtimeStatus, onModelStatusChange, onDataRestored }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance');
   const [query, setQuery] = useState('');
 
@@ -167,6 +169,8 @@ export function SettingsPage({ theme, onThemeChange, onBack, runtimeStatus, onMo
             <ModelSettingsPanel runtimeStatus={runtimeStatus} onStatusChange={onModelStatusChange} />
           ) : activeSection === 'retrieval' ? (
             <RetrievalSettingsPanel runtimeStatus={runtimeStatus} />
+          ) : activeSection === 'storage' ? (
+            <StorageSettingsPanel runtimeStatus={runtimeStatus} onDataRestored={onDataRestored} />
           ) : (
             <section className="settings-placeholder">
               <CurrentIcon size={24} />

@@ -1,4 +1,4 @@
-import type { BackgroundTask, KnowledgeBase, KnowledgeDocument, RetrievalResult, TaskStepStatus } from '../types';
+import type { BackgroundTask, ChatMessage, Conversation, KnowledgeBase, KnowledgeDocument, RetrievalResult, TaskStepStatus } from '../types';
 import type { EmbeddingProvider, EmbeddingState, ModelProvider, ModelState, RerankerProvider, RerankerState, RuntimeStatus } from './RuntimeService';
 
 export interface LocalModelSettings {
@@ -111,10 +111,94 @@ interface ApiSearchResult {
   updated_at: string;
 }
 
+interface ApiConversation {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ApiChatMessage {
+  id: string;
+  role: ChatMessage['role'];
+  content: string;
+  time: string;
+  citations?: ChatMessage['citations'] | null;
+  suggestions?: string[] | null;
+  status?: ChatMessage['status'] | null;
+  feedback?: ChatMessage['feedback'] | null;
+}
+
+export interface StorageStatus {
+  schemaVersion: number;
+  currentSchemaVersion: number;
+  integrity: string;
+  dataDirectory: string;
+  backupDirectory: string;
+  conversationCount: number;
+}
+
+export interface LocalBackup {
+  id: string;
+  createdAt: string;
+  sizeBytes: number;
+  schemaVersion?: number;
+  documentFileCount: number;
+  state: 'valid' | 'invalid';
+  message: string;
+}
+
+interface ApiBackup {
+  id: string;
+  created_at: string;
+  size_bytes: number;
+  schema_version?: number | null;
+  document_file_count: number;
+  state: 'valid' | 'invalid';
+  message: string;
+}
+
 function formatUpdatedLabel(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '刚刚';
   return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function toConversation(item: ApiConversation): Conversation {
+  return {
+    id: item.id,
+    knowledgeBaseId: item.knowledge_base_id,
+    title: item.title,
+    pinned: item.pinned,
+    updatedAt: formatUpdatedLabel(item.updated_at),
+  };
+}
+
+function toChatMessage(item: ApiChatMessage): ChatMessage {
+  return {
+    id: item.id,
+    role: item.role,
+    content: item.content,
+    time: item.time,
+    citations: item.citations ?? undefined,
+    suggestions: item.suggestions ?? undefined,
+    status: item.status ?? undefined,
+    feedback: item.feedback ?? undefined,
+  };
+}
+
+function toBackup(item: ApiBackup): LocalBackup {
+  return {
+    id: item.id,
+    createdAt: item.created_at,
+    sizeBytes: item.size_bytes,
+    schemaVersion: item.schema_version ?? undefined,
+    documentFileCount: item.document_file_count,
+    state: item.state,
+    message: item.message,
+  };
 }
 
 function connection(status: RuntimeStatus) {
@@ -268,6 +352,112 @@ class KnowledgeApiService {
   async detectModel(status: RuntimeStatus): Promise<LocalModelStatus> {
     const response = await request<{ status: ApiModelStatus }>(status, '/api/v1/model/detect', { method: 'POST' });
     return toModelStatus(response.status);
+  }
+
+  async listConversations(status: RuntimeStatus): Promise<{ conversations: Conversation[]; messages: Record<string, ChatMessage[]> }> {
+    const response = await request<{ items: ApiConversation[] }>(status, '/api/v1/conversations');
+    const pairs = await Promise.all(response.items.map(async (conversation) => {
+      const messageResponse = await request<{ items: ApiChatMessage[] }>(
+        status,
+        `/api/v1/conversations/${encodeURIComponent(conversation.id)}/messages`,
+      );
+      return [conversation.id, messageResponse.items.map(toChatMessage)] as const;
+    }));
+    return { conversations: response.items.map(toConversation), messages: Object.fromEntries(pairs) };
+  }
+
+  async createConversation(status: RuntimeStatus, conversation: Conversation): Promise<Conversation> {
+    const response = await request<{ conversation: ApiConversation }>(status, '/api/v1/conversations', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: conversation.id,
+        knowledge_base_id: conversation.knowledgeBaseId,
+        title: conversation.title,
+        pinned: Boolean(conversation.pinned),
+      }),
+    });
+    return toConversation(response.conversation);
+  }
+
+  async updateConversation(status: RuntimeStatus, conversationId: string, changes: { title?: string; pinned?: boolean }): Promise<Conversation> {
+    const response = await request<{ conversation: ApiConversation }>(status, `/api/v1/conversations/${encodeURIComponent(conversationId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(changes),
+    });
+    return toConversation(response.conversation);
+  }
+
+  async deleteConversation(status: RuntimeStatus, conversationId: string) {
+    return request<void>(status, `/api/v1/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+  }
+
+  async replaceConversationMessages(status: RuntimeStatus, conversationId: string, messages: ChatMessage[]) {
+    return request<{ items: ApiChatMessage[] }>(status, `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      method: 'PUT',
+      body: JSON.stringify({ items: messages }),
+    });
+  }
+
+  async importLegacyConversations(
+    status: RuntimeStatus,
+    conversations: Conversation[],
+    messages: Record<string, ChatMessage[]>,
+  ): Promise<{ imported: boolean; conversation_count: number; imported_at: string }> {
+    return request(status, '/api/v1/conversations/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        import_id: 'webview-localstorage-v1',
+        conversations: conversations.map((item) => ({
+          id: item.id,
+          knowledge_base_id: item.knowledgeBaseId,
+          title: item.title,
+          pinned: Boolean(item.pinned),
+        })),
+        messages,
+      }),
+    });
+  }
+
+  async getStorageStatus(status: RuntimeStatus): Promise<StorageStatus> {
+    const response = await request<{
+      schema: { schema_version: number; current_schema_version: number; integrity: string };
+      data_directory: string;
+      backup_directory: string;
+      conversation_count: number;
+    }>(status, '/api/v1/storage/status');
+    return {
+      schemaVersion: response.schema.schema_version,
+      currentSchemaVersion: response.schema.current_schema_version,
+      integrity: response.schema.integrity,
+      dataDirectory: response.data_directory,
+      backupDirectory: response.backup_directory,
+      conversationCount: response.conversation_count,
+    };
+  }
+
+  async listBackups(status: RuntimeStatus): Promise<LocalBackup[]> {
+    const response = await request<{ items: ApiBackup[] }>(status, '/api/v1/storage/backups');
+    return response.items.map(toBackup);
+  }
+
+  async createBackup(status: RuntimeStatus): Promise<LocalBackup> {
+    const response = await request<{ backup: ApiBackup }>(status, '/api/v1/storage/backups', { method: 'POST' });
+    return toBackup(response.backup);
+  }
+
+  async importBackup(status: RuntimeStatus, file: File): Promise<LocalBackup> {
+    const form = new FormData();
+    form.append('backup', file, file.name);
+    const response = await request<{ backup: ApiBackup }>(status, '/api/v1/storage/backups/import', { method: 'POST', body: form });
+    return toBackup(response.backup);
+  }
+
+  async restoreBackup(status: RuntimeStatus, backupId: string): Promise<{ restored: boolean; safety_backup_id?: string }> {
+    return request(status, `/api/v1/storage/backups/${encodeURIComponent(backupId)}/restore`, { method: 'POST' });
+  }
+
+  async openBackupFolder(status: RuntimeStatus) {
+    return request(status, '/api/v1/storage/backups/open-folder', { method: 'POST' });
   }
 
   async listKnowledgeBases(status: RuntimeStatus): Promise<KnowledgeBase[]> {
