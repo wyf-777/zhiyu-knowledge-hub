@@ -570,6 +570,7 @@ def create_app(
         answer_history = history if query_plan.use_answer_history else []
         answer = await model_manager.stream(query_plan.standalone_question, search_results, answer_history)
         answer_prepared_at = time.perf_counter()
+        embedding_status = embedding_manager.status()
         message_id = str(uuid4())
 
         def elapsed_ms(started_at: float, completed_at: float | None = None) -> int:
@@ -589,6 +590,14 @@ def create_app(
                     "answer_setup": elapsed_ms(retrieval_completed_at, answer_prepared_at),
                     "before_stream": elapsed_ms(request_started_at, answer_prepared_at),
                 },
+                diagnostics={
+                    "query_context": query_plan.decision,
+                    "query_rewritten": query_plan.standalone_question != current_question,
+                    "retrieval_query_count": len(retrieval_queries),
+                    "retrieval_candidate_count": len(search_results),
+                    "embedding_execution_mode": embedding_status.execution_mode,
+                    "embedding_model": embedding_status.model_id,
+                },
             )
             yield event(
                 "retrieval.completed",
@@ -599,11 +608,13 @@ def create_app(
             for citation in answer.citations:
                 yield event("citation", citation=citation)
             first_delta_at: float | None = None
+            visible_character_count = 0
             async for delta in answer.deltas:
                 if await request.is_disconnected():
                     return
                 if first_delta_at is None:
                     first_delta_at = time.perf_counter()
+                visible_character_count += len(delta)
                 yield event("message.delta", delta=delta)
             completed_at = time.perf_counter()
             yield event(
@@ -617,6 +628,11 @@ def create_app(
                     "first_answer_delta": elapsed_ms(request_started_at, first_delta_at) if first_delta_at else None,
                     "generation": elapsed_ms(answer_prepared_at, completed_at),
                     "total": elapsed_ms(request_started_at, completed_at),
+                },
+                diagnostics={
+                    **answer.diagnostics,
+                    "citation_count": len(answer.citations),
+                    "visible_character_count": visible_character_count,
                 },
             )
 

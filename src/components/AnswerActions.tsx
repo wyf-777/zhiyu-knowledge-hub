@@ -1,4 +1,4 @@
-import { Copy, RefreshCw, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Copy, Gauge, RefreshCw, ThumbsDown, ThumbsUp } from 'lucide-react';
 
 interface AnswerActionsProps {
   sourceCount: number;
@@ -7,9 +7,12 @@ interface AnswerActionsProps {
   onRegenerate: () => void;
   onViewSources: () => void;
   onFeedback: (value: 'helpful' | 'unhelpful') => void;
+  hasPerformance?: boolean;
+  performanceOpen?: boolean;
+  onPerformanceToggle?: () => void;
 }
 
-export function AnswerActions({ sourceCount, feedback, onCopy, onRegenerate, onViewSources, onFeedback }: AnswerActionsProps) {
+export function AnswerActions({ sourceCount, feedback, onCopy, onRegenerate, onViewSources, onFeedback, hasPerformance, performanceOpen, onPerformanceToggle }: AnswerActionsProps) {
   return (
     <div className="answer-actions">
       <button onClick={onCopy}><Copy size={16} />复制</button>
@@ -17,6 +20,7 @@ export function AnswerActions({ sourceCount, feedback, onCopy, onRegenerate, onV
       <button className={feedback === 'helpful' ? 'is-selected' : ''} onClick={() => onFeedback('helpful')}><ThumbsUp size={16} />有帮助</button>
       <button className={feedback === 'unhelpful' ? 'is-selected' : ''} onClick={() => onFeedback('unhelpful')}><ThumbsDown size={16} />没帮助</button>
       <button onClick={onRegenerate}><RefreshCw size={16} />重新生成</button>
+      {hasPerformance && <button className={performanceOpen ? 'is-selected' : ''} aria-expanded={performanceOpen} onClick={onPerformanceToggle}><Gauge size={16} />性能</button>}
     </div>
   );
 }

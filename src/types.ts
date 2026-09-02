@@ -39,6 +39,36 @@ export interface Citation {
   } | null;
 }
 
+export interface AnswerPerformance {
+  provider: string;
+  timingsMs: {
+    planning?: number;
+    retrieval?: number;
+    answerSetup?: number;
+    beforeStream?: number;
+    firstAnswerDelta?: number | null;
+    generation?: number;
+    total?: number;
+  };
+  queryContext?: 'independent' | 'follow_up' | 'uncertain';
+  queryRewritten?: boolean;
+  retrievalQueryCount?: number;
+  retrievalCandidateCount?: number;
+  embeddingExecutionMode?: string;
+  embeddingModel?: string;
+  answerPath?: 'generated' | 'extractive-fast' | 'extractive-fallback' | 'no-evidence';
+  validation?: string;
+  validationRetryCount?: number;
+  usedExtractiveFallback?: boolean;
+  modelCpuFallback?: boolean;
+  modelLoadMs?: number;
+  promptTokens?: number;
+  generatedTokens?: number;
+  tokensPerSecond?: number | null;
+  citationCount?: number;
+  visibleCharacterCount?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -48,6 +78,7 @@ export interface ChatMessage {
   suggestions?: string[];
   status?: 'complete' | 'streaming' | 'stopped' | 'no-evidence' | 'error';
   feedback?: 'helpful' | 'unhelpful';
+  performance?: AnswerPerformance;
 }
 
 export type TaskStepStatus = 'waiting' | 'running' | 'success' | 'failed';

@@ -123,7 +123,16 @@ POST /api/v1/storage/backups/open-folder
 
 `.zhiyu-backup` 包含数据库、原始文档和带 SHA-256 的版本化清单。恢复前检查路径穿越、条目数量、解压体积、文件大小、哈希、SQLite `quick_check`、数据表、schema 版本和文档完整性；真正替换前自动创建 `pre-restore` 安全备份，失败时回滚原数据库与文档目录。
 
-### 4.4 检索
+### 4.6 流式回答诊断
+
+`POST /api/v1/chat/completions` 使用 NDJSON 依次返回 `message.start`、`retrieval.completed`、`citation`、`message.delta` 与 `message.completed`。起止事件包含不携带正文的本地诊断信息：
+
+- `timings_ms`：问题规划、检索、回答准备、首段可见、生成和总耗时。
+- `diagnostics`：上下文判定、是否改写、检索路数和候选量、Embedding 运行方式、回答路径、引用校验重试、原文回退、模型加载耗时、token 数与生成速度。
+
+诊断字段只描述运行阶段和计数，不包含用户问题、对话历史、检索片段或文档内容。前端默认收起显示，当前阶段不持久化到 SQLite。
+
+### 4.7 检索
 
 ```text
 POST /api/v1/retrieval/search
@@ -144,7 +153,7 @@ POST /api/v1/retrieval/search
 
 当前 `POST /api/v1/retrieval/search` 还会返回 `index_mode`、`embedding` 与 `reranker` 状态。当前 `index_mode` 为 `hybrid-rrf-rerank-v1`；每个命中项可包含 `parent_chunk_id`、`parent_content`、`content_kind`、`location`、`vector_score`、`lexical_score`、`support_factor`、`retrieval_score`、`rerank_score`、`evidence_score`、`retrieval_mode`、`embedding_model_id` 和 `reranker_model_id`，用于检索诊断。`content` 是参与召回的精确子块，`parent_content` 只提供回答上下文；同一父块的多个结果会在重排后去重。
 
-### 4.5 问答
+### 4.8 问答
 
 ```text
 POST /api/v1/chat/completions
@@ -202,7 +211,7 @@ error
 }
 ```
 
-### 4.6 模型
+### 4.9 模型
 
 ```text
 GET  /api/v1/model/settings

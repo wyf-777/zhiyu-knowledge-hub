@@ -220,6 +220,10 @@ async def test_streaming_chat_uses_real_retrieval_and_citations(tmp_path: Path) 
     assert events[0]["event"] == "message.start"
     assert set(events[0]["timings_ms"]) == {"planning", "retrieval", "answer_setup", "before_stream"}
     assert all(value >= 0 for value in events[0]["timings_ms"].values())
+    assert events[0]["diagnostics"]["query_context"] == "independent"
+    assert events[0]["diagnostics"]["retrieval_query_count"] >= 1
+    assert events[0]["diagnostics"]["retrieval_candidate_count"] >= 1
+    assert events[0]["diagnostics"]["embedding_execution_mode"] == "local"
     assert any(event["event"] == "retrieval.completed" and event["count"] >= 1 for event in events)
     citation = next(event["citation"] for event in events if event["event"] == "citation")
     assert citation["document_name"] == "差旅制度.txt"
@@ -230,6 +234,9 @@ async def test_streaming_chat_uses_real_retrieval_and_citations(tmp_path: Path) 
     assert events[-1]["no_evidence"] is False
     assert events[-1]["timings_ms"]["first_answer_delta"] is not None
     assert events[-1]["timings_ms"]["total"] >= events[-1]["timings_ms"]["generation"]
+    assert events[-1]["diagnostics"]["answer_path"] == "extractive-fallback"
+    assert events[-1]["diagnostics"]["citation_count"] >= 1
+    assert events[-1]["diagnostics"]["visible_character_count"] == len(answer)
 
 
 @pytest.mark.anyio

@@ -13,7 +13,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { TopBar } from './components/TopBar';
 import { initialConversations, initialMessages, initialTasks, knowledgeBases as mockKnowledgeBases } from './data/mockData';
 import type { ThemeName } from './types';
-import type { ChatMessage, Citation, Conversation, KnowledgeDocument } from './types';
+import type { AnswerPerformance, ChatMessage, Citation, Conversation, KnowledgeDocument } from './types';
 import { mockChatService } from './services/MockChatService';
 import { runtimeService } from './services/RuntimeService';
 import type { RuntimeStatus } from './services/RuntimeService';
@@ -404,11 +404,13 @@ export default function App() {
         : await mockChatService.streamAnswer(question, controller.signal, (chunk) => {
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + chunk } : message));
       });
+      const performance = 'performance' in result ? result.performance as AnswerPerformance : undefined;
       setMessages((current) => current.map((message) => message.id === assistantId ? {
         ...message,
         citations: result.citations,
         suggestions: result.suggestions,
         status: result.noEvidence ? 'no-evidence' : 'complete',
+        performance,
       } : message));
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {

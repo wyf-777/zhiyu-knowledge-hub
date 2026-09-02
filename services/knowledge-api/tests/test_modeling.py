@@ -268,7 +268,14 @@ async def test_ollama_answer_is_forwarded_as_native_stream(tmp_path) -> None:
         payloads.append(payload)
         body = (
             json.dumps({"message": {"content": "负责人上限"}}, ensure_ascii=False) + "\n"
-            + json.dumps({"message": {"content": "为 650 元。 [[1]]"}, "done": True}, ensure_ascii=False) + "\n"
+            + json.dumps({
+                "message": {"content": "为 650 元。 [[1]]"},
+                "done": True,
+                "load_duration": 250_000_000,
+                "prompt_eval_count": 120,
+                "eval_count": 24,
+                "eval_duration": 2_000_000_000,
+            }, ensure_ascii=False) + "\n"
         )
         return httpx.Response(200, content=body.encode("utf-8"), headers={"content-type": "application/x-ndjson"})
 
@@ -296,6 +303,11 @@ async def test_ollama_answer_is_forwarded_as_native_stream(tmp_path) -> None:
     assert payloads[0]["keep_alive"] == "15m"
     assert payloads[0]["options"]["num_predict"] == 180
     assert payloads[0]["options"]["num_ctx"] == 4096
+    assert answer_stream.diagnostics["answer_path"] == "generated"
+    assert answer_stream.diagnostics["model_load_ms"] == 250
+    assert answer_stream.diagnostics["prompt_tokens"] == 120
+    assert answer_stream.diagnostics["generated_tokens"] == 24
+    assert answer_stream.diagnostics["tokens_per_second"] == 12.0
 
 
 @pytest.mark.anyio
@@ -424,6 +436,8 @@ async def test_invalid_stream_gets_one_short_grounded_retry(tmp_path) -> None:
     assert len(payloads) == 2
     assert payloads[1]["stream"] is False
     assert payloads[1]["options"]["num_predict"] <= 240
+    assert answer.diagnostics["validation_retry_count"] == 1
+    assert answer.diagnostics["used_extractive_fallback"] is False
 
 
 @pytest.mark.anyio

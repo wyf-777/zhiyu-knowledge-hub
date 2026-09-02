@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from collections.abc import AsyncIterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -51,6 +51,7 @@ class GroundedAnswerStream:
     no_evidence: bool
     provider: str
     deltas: AsyncIterator[str]
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -456,6 +457,7 @@ class ModelManager:
                 no_evidence=True,
                 provider=fallback.provider,
                 deltas=_chunked_text(fallback.content),
+                diagnostics={"answer_path": "no-evidence", "validation": "not-required"},
             )
         evidence = select_evidence(question, search_results)
         fast_answer = fast_factual_answer(question, evidence)
@@ -466,6 +468,7 @@ class ModelManager:
                 no_evidence=False,
                 provider="extractive-fast-v1",
                 deltas=_chunked_text(fast_answer),
+                diagnostics={"answer_path": "extractive-fast", "validation": "source-locked"},
             )
         settings = self.get_settings()
         status = await self.status()
@@ -476,12 +479,20 @@ class ModelManager:
                 no_evidence=False,
                 provider=fallback.provider,
                 deltas=_chunked_text(fallback.content),
+                diagnostics={"answer_path": "extractive-fallback", "validation": "source-locked"},
             )
 
         system_prompt, user_prompt = self._answer_prompts(question, evidence, history)
         provider = "ollama" if settings.provider == "auto" else settings.provider
         valid_markers = {f"[[{index}]]" for index in range(1, len(fallback.citations) + 1)}
-        generation_state = {"failed": False}
+        generation_state: dict[str, Any] = {
+            "failed": False,
+            "answer_path": "generated",
+            "validation": "buffered-citation",
+            "validation_retry_count": 0,
+            "used_extractive_fallback": False,
+            "model_cpu_fallback": self._force_cpu,
+        }
 
         async def ollama_deltas() -> AsyncIterator[str]:
             use_cpu = self._force_cpu
@@ -513,6 +524,7 @@ class ModelManager:
                                     self._status_cache = None
                                     self._status_cached_at = 0.0
                                     use_cpu = True
+                                    generation_state["model_cpu_fallback"] = True
                                     continue
                                 response.raise_for_status()
                             async for line in response.aiter_lines():
@@ -522,6 +534,17 @@ class ModelManager:
                                 delta = str(event.get("message", {}).get("content", ""))
                                 if delta:
                                     yield delta
+                                if event.get("done"):
+                                    eval_count = int(event.get("eval_count") or 0)
+                                    eval_duration = int(event.get("eval_duration") or 0)
+                                    generation_state.update(
+                                        {
+                                            "model_load_ms": round(int(event.get("load_duration") or 0) / 1_000_000),
+                                            "prompt_tokens": int(event.get("prompt_eval_count") or 0),
+                                            "generated_tokens": eval_count,
+                                            "tokens_per_second": round(eval_count / (eval_duration / 1_000_000_000), 2) if eval_count and eval_duration else None,
+                                        }
+                                    )
                     break
                 except (httpx.HTTPError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                     generation_state["failed"] = True
@@ -560,6 +583,7 @@ class ModelManager:
                 return
 
         async def retry_invalid_answer(reason: str) -> str | None:
+            generation_state["validation_retry_count"] = int(generation_state["validation_retry_count"]) + 1
             retry_system = (
                 system_prompt
                 + "上一版回答未通过本地校验。请重新生成一个更短的最终答案：先给结论，最多三句话，"
@@ -632,6 +656,7 @@ class ModelManager:
                         async for repaired_delta in _chunked_text(repaired):
                             yield repaired_delta
                         return
+                    generation_state["used_extractive_fallback"] = True
                     async for fallback_delta in _chunked_text(fallback.content):
                         yield fallback_delta
                     return
@@ -641,6 +666,7 @@ class ModelManager:
                         async for repaired_delta in _chunked_text(repaired):
                             yield repaired_delta
                         return
+                    generation_state["used_extractive_fallback"] = True
                     async for fallback_delta in _chunked_text(fallback.content):
                         yield fallback_delta
                     return
@@ -656,6 +682,7 @@ class ModelManager:
                 yield buffer
                 return
             if generation_state["failed"] and not buffer.strip():
+                generation_state["used_extractive_fallback"] = True
                 async for fallback_delta in _chunked_text(fallback.content):
                     yield fallback_delta
                 return
@@ -664,6 +691,7 @@ class ModelManager:
                 async for repaired_delta in _chunked_text(repaired):
                     yield repaired_delta
                 return
+            generation_state["used_extractive_fallback"] = True
             async for fallback_delta in _chunked_text(fallback.content):
                 yield fallback_delta
 
@@ -674,6 +702,7 @@ class ModelManager:
             no_evidence=False,
             provider=f"{provider}:{settings.model}",
             deltas=validated_deltas(raw_deltas),
+            diagnostics=generation_state,
         )
 
     async def build(

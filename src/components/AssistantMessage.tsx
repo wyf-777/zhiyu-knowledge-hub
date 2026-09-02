@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Box, LoaderCircle, Sparkles, Square } from 'lucide-react';
 import type { ChatMessage } from '../types';
 import { AnswerActions } from './AnswerActions';
+import { AnswerDiagnostics } from './AnswerDiagnostics';
 import { CitationMarker } from './CitationMarker';
 
 interface AssistantMessageProps {
@@ -29,6 +31,7 @@ function renderParagraph(text: string, citations: ChatMessage['citations'], onOp
 }
 
 export function AssistantMessage({ message, onOpenCitation, onCopy, onRegenerate, onFeedback, onSuggestion }: AssistantMessageProps) {
+  const [performanceOpen, setPerformanceOpen] = useState(false);
   const blocks = message.content.split('\n\n');
   return (
     <article className="assistant-message">
@@ -61,8 +64,12 @@ export function AssistantMessage({ message, onOpenCitation, onCopy, onRegenerate
           onRegenerate={onRegenerate}
           onViewSources={() => message.citations?.[0] && onOpenCitation(message.citations[0].id)}
           onFeedback={(value) => onFeedback(message.id, value)}
+          hasPerformance={Boolean(message.performance)}
+          performanceOpen={performanceOpen}
+          onPerformanceToggle={() => setPerformanceOpen((value) => !value)}
         />
       )}
+      {performanceOpen && message.performance && <AnswerDiagnostics performance={message.performance} />}
       {!!message.suggestions?.length && (
         <div className="suggestions-block">
           <span>推荐追问</span>

@@ -1,4 +1,4 @@
-import type { ChatMessage, Citation } from '../types';
+import type { AnswerPerformance, ChatMessage, Citation } from '../types';
 import type { RuntimeStatus } from './RuntimeService';
 
 export interface LocalStreamResult {
@@ -6,6 +6,7 @@ export interface LocalStreamResult {
   suggestions: string[];
   noEvidence: boolean;
   provider: string;
+  performance: AnswerPerformance;
 }
 
 interface StreamEvent {
@@ -14,6 +15,34 @@ interface StreamEvent {
   no_evidence?: boolean;
   suggestions?: string[];
   provider?: string;
+  timings_ms?: {
+    planning?: number;
+    retrieval?: number;
+    answer_setup?: number;
+    before_stream?: number;
+    first_answer_delta?: number | null;
+    generation?: number;
+    total?: number;
+  };
+  diagnostics?: {
+    query_context?: AnswerPerformance['queryContext'];
+    query_rewritten?: boolean;
+    retrieval_query_count?: number;
+    retrieval_candidate_count?: number;
+    embedding_execution_mode?: string;
+    embedding_model?: string;
+    answer_path?: AnswerPerformance['answerPath'];
+    validation?: string;
+    validation_retry_count?: number;
+    used_extractive_fallback?: boolean;
+    model_cpu_fallback?: boolean;
+    model_load_ms?: number;
+    prompt_tokens?: number;
+    generated_tokens?: number;
+    tokens_per_second?: number | null;
+    citation_count?: number;
+    visible_character_count?: number;
+  };
   citation?: {
     id: number;
     chunk_id: string;
@@ -100,6 +129,10 @@ class LocalChatService {
     let suggestions: string[] = [];
     let noEvidence = false;
     let provider = 'unknown';
+    let startTimings: NonNullable<StreamEvent['timings_ms']> = {};
+    let completionTimings: NonNullable<StreamEvent['timings_ms']> = {};
+    let startDiagnostics: NonNullable<StreamEvent['diagnostics']> = {};
+    let completionDiagnostics: NonNullable<StreamEvent['diagnostics']> = {};
     let completed = false;
     let buffer = '';
     const decoder = new TextDecoder();
@@ -108,13 +141,19 @@ class LocalChatService {
     const handleLine = (line: string) => {
       if (!line.trim()) return;
       const event = JSON.parse(line) as StreamEvent;
-      if (event.event === 'message.start' && event.provider) provider = event.provider;
+      if (event.event === 'message.start') {
+        if (event.provider) provider = event.provider;
+        startTimings = event.timings_ms ?? {};
+        startDiagnostics = event.diagnostics ?? {};
+      }
       if (event.event === 'citation' && event.citation) citations.push(toCitation(event.citation));
       if (event.event === 'message.delta' && event.delta) onChunk(event.delta);
       if (event.event === 'message.completed') {
         suggestions = event.suggestions ?? [];
         noEvidence = Boolean(event.no_evidence);
         provider = event.provider ?? provider;
+        completionTimings = event.timings_ms ?? {};
+        completionDiagnostics = event.diagnostics ?? {};
         completed = true;
       }
     };
@@ -129,7 +168,42 @@ class LocalChatService {
     }
     if (buffer.trim()) handleLine(buffer);
     if (!completed) throw new Error('本地回答流意外中断。');
-    return { citations, suggestions, noEvidence, provider };
+    const diagnostics = { ...startDiagnostics, ...completionDiagnostics };
+    return {
+      citations,
+      suggestions,
+      noEvidence,
+      provider,
+      performance: {
+        provider,
+        timingsMs: {
+          planning: startTimings.planning,
+          retrieval: startTimings.retrieval,
+          answerSetup: startTimings.answer_setup,
+          beforeStream: startTimings.before_stream,
+          firstAnswerDelta: completionTimings.first_answer_delta,
+          generation: completionTimings.generation,
+          total: completionTimings.total,
+        },
+        queryContext: diagnostics.query_context,
+        queryRewritten: diagnostics.query_rewritten,
+        retrievalQueryCount: diagnostics.retrieval_query_count,
+        retrievalCandidateCount: diagnostics.retrieval_candidate_count,
+        embeddingExecutionMode: diagnostics.embedding_execution_mode,
+        embeddingModel: diagnostics.embedding_model,
+        answerPath: diagnostics.answer_path,
+        validation: diagnostics.validation,
+        validationRetryCount: diagnostics.validation_retry_count,
+        usedExtractiveFallback: diagnostics.used_extractive_fallback,
+        modelCpuFallback: diagnostics.model_cpu_fallback,
+        modelLoadMs: diagnostics.model_load_ms,
+        promptTokens: diagnostics.prompt_tokens,
+        generatedTokens: diagnostics.generated_tokens,
+        tokensPerSecond: diagnostics.tokens_per_second,
+        citationCount: diagnostics.citation_count,
+        visibleCharacterCount: diagnostics.visible_character_count,
+      },
+    };
   }
 }
 
