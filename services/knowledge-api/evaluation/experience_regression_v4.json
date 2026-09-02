@@ -1,0 +1,91 @@
+{
+  "version": "zhiyu-experience-regression-v4",
+  "includes": ["experience_regression_v3.json"],
+  "provenance": {
+    "type": "local-user-feedback",
+    "contains_document_content": false,
+    "recorded_at": "2026-09-02",
+    "note": "在 v3 真实体验问题上增加表达不变性分组和意义变化反例；只保存脱敏问题、来源文件名与禁止事实。"
+  },
+  "knowledge_base_id": "enterprise",
+  "default_constraints": {
+    "citation_required": true,
+    "max_answer_chars": 700,
+    "min_expected_source_score": 0.45,
+    "prohibited_patterns": ["|---|", "当前尚未启用大模型归纳"]
+  },
+  "quality_gates": {
+    "min_expression_consistency_rate": 1.0,
+    "min_source_consistency_rate": 0.8,
+    "min_contrast_accuracy_rate": 1.0,
+    "max_query_drift_rate": 0.0
+  },
+  "cases": [
+    {
+      "id": "salary-expression-direct-date",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "equivalent",
+      "query": "工资哪天发？",
+      "expected_terms": ["每月15日", "节假日"],
+      "expected_sources": ["04-薪酬福利管理制度.md", "01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "salary-expression-time-fronted",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "equivalent",
+      "query": "什么时候发工资？",
+      "expected_terms": ["每月15日", "节假日"],
+      "expected_sources": ["04-薪酬福利管理制度.md", "01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "salary-expression-subject-fronted",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "equivalent",
+      "query": "工资什么时候发？",
+      "expected_terms": ["每月15日", "节假日"],
+      "expected_sources": ["04-薪酬福利管理制度.md", "01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "salary-expression-monthly-day",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "equivalent",
+      "query": "每个月几号发工资？",
+      "expected_terms": ["每月15日", "节假日"],
+      "expected_sources": ["04-薪酬福利管理制度.md", "01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "salary-expression-payday-wording",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "equivalent",
+      "query": "发薪日期是什么时候？",
+      "expected_terms": ["每月15日", "节假日"],
+      "expected_sources": ["04-薪酬福利管理制度.md", "01-员工手册（2026修订版）.docx"]
+    },
+    {
+      "id": "salary-contrast-departure",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "contrast",
+      "query": "离职后工资什么时候发？",
+      "required_query_constraints": [["离职", "离职后", "离职员工"]],
+      "expected_terms": ["次月15日"],
+      "prohibited_terms": ["在职员工每月15日发放"],
+      "expected_sources": ["01-员工手册（2026修订版）.docx", "07-员工入转调离管理办法.md"]
+    },
+    {
+      "id": "salary-contrast-bonus",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "contrast",
+      "query": "奖金什么时候发？",
+      "required_query_constraints": [["奖金", "绩效奖金", "年终奖"]],
+      "prohibited_terms": ["工资原则上每月15日发放"]
+    },
+    {
+      "id": "salary-contrast-overtime-pay",
+      "paraphrase_group_id": "salary-payment-date",
+      "variant_kind": "contrast",
+      "query": "加班费什么时候发？",
+      "required_query_constraints": [["加班费", "加班工资", "加班补偿"]],
+      "prohibited_terms": ["工资原则上每月15日发放"]
+    }
+  ]
+}

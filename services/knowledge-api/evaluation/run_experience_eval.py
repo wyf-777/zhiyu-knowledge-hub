@@ -10,9 +10,9 @@ SERVICE_DIR = Path(__file__).resolve().parents[1]
 if str(SERVICE_DIR) not in sys.path:
     sys.path.insert(0, str(SERVICE_DIR))
 
-from knowledge_api.evaluation import load_dataset  # noqa: E402
 from knowledge_api.experience_evaluation import (  # noqa: E402
     default_app_data_dir,
+    load_experience_manifest,
     run_experience_evaluation_sync,
     snapshot_knowledge_data,
     validate_experience_manifest,
@@ -21,7 +21,7 @@ from knowledge_api.experience_evaluation import (  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="在本地知识库只读快照上运行真实体验回归")
-    parser.add_argument("--manifest", type=Path, default=Path(__file__).with_name("experience_regression_v3.json"))
+    parser.add_argument("--manifest", type=Path, default=Path(__file__).with_name("experience_regression_v4.json"))
     parser.add_argument("--data-dir", type=Path, default=default_app_data_dir())
     parser.add_argument("--mode", choices=["retrieval", "answer", "all"], default="all")
     parser.add_argument("--embedding-provider", choices=["auto", "hashing", "ollama"], default="auto")
@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--fail-on-error", action="store_true")
     args = parser.parse_args()
     try:
-        manifest = validate_experience_manifest(load_dataset(args.manifest))
+        manifest = load_experience_manifest(args.manifest)
         with TemporaryDirectory(prefix="zhiyu-experience-eval-") as temporary_dir:
             snapshot_dir = Path(temporary_dir)
             snapshot_knowledge_data(args.data_dir, snapshot_dir)
@@ -58,7 +58,10 @@ def main() -> None:
     if args.summary:
         print(json.dumps({
             key: report[key]
-            for key in ("manifest_version", "mode", "case_count", "passed", "failed", "pass_rate", "embedding", "elapsed_ms")
+            for key in (
+                "manifest_version", "mode", "case_count", "passed", "failed", "pass_rate", "embedding",
+                "expression_metrics", "quality_gates_passed", "quality_gate_failures", "elapsed_ms",
+            )
         } | {
             "failures": [
                 {"id": case["id"], "failures": case["failures"], "latency_ms": case["latency_ms"]}
@@ -68,8 +71,12 @@ def main() -> None:
         }, ensure_ascii=False, indent=2))
     else:
         print(rendered)
-    if args.fail_on_error and report["failed"]:
-        parser.exit(3, f"真实体验回归未通过：{report['failed']} / {report['case_count']} 个案例失败\n")
+    if args.fail_on_error and (report["failed"] or not report["quality_gates_passed"]):
+        parser.exit(
+            3,
+            f"真实体验回归未通过：{report['failed']} / {report['case_count']} 个案例失败，"
+            f"质量门禁失败 {len(report['quality_gate_failures'])} 项\n",
+        )
 
 
 if __name__ == "__main__":

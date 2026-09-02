@@ -19,6 +19,7 @@ from .retrieval_planning import build_retrieval_queries
 from .storage import KnowledgeStore
 
 ExperienceMode = Literal["retrieval", "answer", "all"]
+_VARIANT_KINDS = {"equivalent", "contrast"}
 
 
 def default_app_data_dir() -> Path:
@@ -53,7 +54,42 @@ def validate_experience_manifest(payload: dict[str, Any]) -> dict[str, Any]:
         identifiers.add(identifier)
         if not str(case.get("query") or "").strip():
             raise ValueError(f"体验回归案例缺少 query：{identifier}")
+        group_id = str(case.get("paraphrase_group_id") or "").strip()
+        variant_kind = str(case.get("variant_kind") or "").strip()
+        if group_id and variant_kind not in _VARIANT_KINDS:
+            raise ValueError(f"表达分组案例必须声明 variant_kind：{identifier}")
+        if variant_kind and not group_id:
+            raise ValueError(f"variant_kind 必须与 paraphrase_group_id 同时使用：{identifier}")
+        for field_name in ("required_query_constraints", "forbidden_query_terms", "prohibited_sources"):
+            value = case.get(field_name, [])
+            if not isinstance(value, list):
+                raise ValueError(f"{field_name} 必须是数组：{identifier}")
+    gates = payload.get("quality_gates", {})
+    if not isinstance(gates, dict):
+        raise ValueError("quality_gates 必须是对象")
+    for name, value in gates.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= float(value) <= 1:
+            raise ValueError(f"质量门禁 {name} 必须是 0 到 1 之间的数字")
     return payload
+
+
+def load_experience_manifest(path: Path) -> dict[str, Any]:
+    """Load a manifest and merge explicitly listed sibling manifests."""
+
+    resolved_path = path.resolve()
+    payload = json.loads(resolved_path.read_text(encoding="utf-8"))
+    includes = payload.pop("includes", [])
+    if not isinstance(includes, list):
+        raise ValueError("includes 必须是数组")
+    inherited_cases: list[dict[str, Any]] = []
+    for item in includes:
+        include_path = (resolved_path.parent / str(item)).resolve()
+        if include_path.parent != resolved_path.parent or include_path == resolved_path:
+            raise ValueError(f"体验回归 includes 只能引用同目录文件：{item}")
+        inherited = load_experience_manifest(include_path)
+        inherited_cases.extend(inherited["cases"])
+    payload["cases"] = [*inherited_cases, *payload.get("cases", [])]
+    return validate_experience_manifest(payload)
 
 
 def snapshot_knowledge_data(source_data_dir: Path, destination_data_dir: Path) -> Path:
@@ -106,6 +142,98 @@ def _retrieval_queries(roots: tuple[str, ...]) -> list[str]:
     return queries
 
 
+def _constraint_is_present(query: str, alternatives: object) -> bool:
+    if not isinstance(alternatives, list) or not alternatives:
+        return False
+    normalized_query = _normalized(query)
+    return any(_normalized(str(term)) in normalized_query for term in alternatives)
+
+
+def _pairwise_jaccard(sets: list[set[str]]) -> float:
+    scores: list[float] = []
+    for left_index, left in enumerate(sets):
+        for right in sets[left_index + 1:]:
+            union = left | right
+            scores.append(len(left & right) / len(union) if union else 1.0)
+    return sum(scores) / len(scores) if scores else 1.0
+
+
+def build_expression_metrics(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize paraphrase stability without reading or storing document bodies."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for report in reports:
+        group_id = str(report.get("paraphrase_group_id") or "")
+        if group_id:
+            grouped.setdefault(group_id, []).append(report)
+
+    equivalent_cases = [
+        report for items in grouped.values() for report in items
+        if report.get("variant_kind") == "equivalent"
+    ]
+    contrast_cases = [
+        report for items in grouped.values() for report in items
+        if report.get("variant_kind") == "contrast"
+    ]
+    source_scores: list[float] = []
+    group_reports: list[dict[str, Any]] = []
+    for group_id, items in grouped.items():
+        equivalents = [item for item in items if item.get("variant_kind") == "equivalent"]
+        relevant_source_sets = [set(item.get("matched_expected_sources", [])) for item in equivalents]
+        source_consistency = _pairwise_jaccard(relevant_source_sets)
+        if len(equivalents) >= 2:
+            source_scores.append(source_consistency)
+        group_reports.append({
+            "id": group_id,
+            "equivalent_count": len(equivalents),
+            "contrast_count": len(items) - len(equivalents),
+            "expression_consistency_rate": round(
+                sum(bool(item.get("retrieval_passed")) for item in equivalents) / max(1, len(equivalents)), 4
+            ),
+            "source_consistency_rate": round(source_consistency, 4),
+            "query_drift_count": sum(bool(item.get("query_drift")) for item in items),
+        })
+
+    return {
+        "group_count": len(grouped),
+        "equivalent_case_count": len(equivalent_cases),
+        "contrast_case_count": len(contrast_cases),
+        "expression_consistency_rate": round(
+            sum(bool(item.get("retrieval_passed")) for item in equivalent_cases) / max(1, len(equivalent_cases)), 4
+        ),
+        "source_consistency_rate": round(sum(source_scores) / max(1, len(source_scores)), 4),
+        "query_drift_rate": round(
+            sum(bool(item.get("query_drift")) for item in equivalent_cases + contrast_cases)
+            / max(1, len(equivalent_cases) + len(contrast_cases)),
+            4,
+        ),
+        "contrast_accuracy_rate": round(
+            sum(bool(item.get("retrieval_passed")) for item in contrast_cases) / max(1, len(contrast_cases)), 4
+        ),
+        "groups": group_reports,
+    }
+
+
+def evaluate_quality_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> list[str]:
+    checks = {
+        "min_expression_consistency_rate": ("expression_consistency_rate", "表达一致率", "min"),
+        "min_source_consistency_rate": ("source_consistency_rate", "来源一致率", "min"),
+        "min_contrast_accuracy_rate": ("contrast_accuracy_rate", "意义变化反例准确率", "min"),
+        "max_query_drift_rate": ("query_drift_rate", "查询漂移率", "max"),
+    }
+    failures: list[str] = []
+    for gate_name, (metric_name, label, direction) in checks.items():
+        if gate_name not in gates:
+            continue
+        expected = float(gates[gate_name])
+        actual = float(metrics.get(metric_name, 0.0))
+        failed = actual < expected if direction == "min" else actual > expected
+        if failed:
+            operator = ">=" if direction == "min" else "<="
+            failures.append(f"{label}应{operator}{expected:.4f}，实际为 {actual:.4f}")
+    return failures
+
+
 async def run_experience_evaluation(
     manifest: dict[str, Any],
     data_dir: Path,
@@ -142,6 +270,7 @@ async def run_experience_evaluation(
     for case in selected_cases:
         case_started_at = time.perf_counter()
         query = str(case["query"]).strip()
+        constraints = {**defaults, **case}
         history = [
             {"role": str(item.get("role") or ""), "content": str(item.get("content") or "")}
             for item in case.get("history", [])
@@ -157,6 +286,7 @@ async def run_experience_evaluation(
         results = processor.search_many(queries, [knowledge_base_id], 12)
         returned_sources = list(dict.fromkeys(str(item["document_name"]) for item in results))
         failures: list[str] = []
+        drift_reasons: list[str] = []
 
         expected_decision = case.get("expected_context_decision")
         if expected_decision and plan.decision != expected_decision:
@@ -166,13 +296,45 @@ async def run_experience_evaluation(
             failures.append(f"独立问题不匹配：{plan.standalone_question}")
 
         expected_sources = [str(item) for item in case.get("expected_sources", [])]
+        minimum_source_score = float(constraints.get("min_expected_source_score") or 0.0)
+        source_scores = {
+            source: max(
+                (float(item.get("evidence_score", item.get("score", 0.0))) for item in results if str(item["document_name"]) == source),
+                default=0.0,
+            )
+            for source in expected_sources
+        }
+        matched: list[str] = []
         if expected_sources:
-            matched = [source for source in expected_sources if source in returned_sources]
+            matched = [
+                source for source in expected_sources
+                if source in returned_sources and source_scores[source] >= minimum_source_score
+            ]
             source_match = str(case.get("source_match") or "any")
             if source_match == "all" and len(matched) != len(expected_sources):
-                failures.append(f"缺少预期来源：{[source for source in expected_sources if source not in matched]}")
+                failures.append(
+                    f"缺少达到证据阈值 {minimum_source_score:.2f} 的预期来源："
+                    f"{[source for source in expected_sources if source not in matched]}"
+                )
             elif source_match != "all" and not matched:
-                failures.append(f"未召回任一预期来源：{expected_sources}")
+                failures.append(f"未召回达到证据阈值 {minimum_source_score:.2f} 的预期来源：{expected_sources}")
+
+        expanded_queries = queries[1:]
+        for alternatives in case.get("required_query_constraints", []):
+            missing_in = [item for item in expanded_queries if not _constraint_is_present(item, alternatives)]
+            if missing_in:
+                drift_reasons.append(f"扩展查询丢失约束 {alternatives}：{missing_in}")
+        for term in case.get("forbidden_query_terms", []):
+            contaminated = [item for item in queries if _normalized(str(term)) in _normalized(item)]
+            if contaminated:
+                drift_reasons.append(f"查询混入禁用语义“{term}”：{contaminated}")
+        prohibited_sources = [str(item) for item in case.get("prohibited_sources", [])]
+        returned_prohibited_sources = [source for source in prohibited_sources if source in returned_sources]
+        if returned_prohibited_sources:
+            drift_reasons.append(f"召回禁止来源：{returned_prohibited_sources}")
+        if drift_reasons:
+            failures.extend(drift_reasons)
+        retrieval_passed = not failures
 
         provider = "not-run"
         citation_sources: list[str] = []
@@ -187,7 +349,6 @@ async def run_experience_evaluation(
             provider = answer.provider
             answer_chars = len(content)
             citation_sources = list(dict.fromkeys(str(item["document_name"]) for item in answer.citations))
-            constraints = {**defaults, **case}
             missing = _missing_terms(content, list(constraints.get("expected_terms", [])))
             if missing:
                 failures.append(f"答案缺少关键词：{missing}")
@@ -214,11 +375,18 @@ async def run_experience_evaluation(
             "id": str(case["id"]),
             "query": query,
             "passed": not failures,
+            "retrieval_passed": retrieval_passed,
             "failures": failures,
+            "paraphrase_group_id": case.get("paraphrase_group_id"),
+            "variant_kind": case.get("variant_kind"),
+            "query_drift": bool(drift_reasons),
+            "query_drift_reasons": drift_reasons,
             "context_decision": plan.decision,
             "standalone_question": plan.standalone_question,
             "retrieval_queries": queries,
             "returned_sources": returned_sources[:8],
+            "matched_expected_sources": matched,
+            "expected_source_scores": {key: round(value, 4) for key, value in source_scores.items()},
             "provider": provider,
             "citation_sources": citation_sources,
             "answer_chars": answer_chars,
@@ -229,6 +397,9 @@ async def run_experience_evaluation(
         reports.append(case_report)
 
     passed = sum(bool(item["passed"]) for item in reports)
+    expression_metrics = build_expression_metrics(reports)
+    quality_gates = manifest.get("quality_gates") if isinstance(manifest.get("quality_gates"), dict) else {}
+    quality_gate_failures = evaluate_quality_gates(expression_metrics, quality_gates)
     return {
         "manifest_version": manifest.get("version", "unknown"),
         "mode": mode,
@@ -238,6 +409,10 @@ async def run_experience_evaluation(
         "pass_rate": round(passed / max(1, len(reports)), 4),
         "embedding": embeddings.status().to_dict(),
         "elapsed_ms": round((time.perf_counter() - started_at) * 1000),
+        "expression_metrics": expression_metrics,
+        "quality_gates": quality_gates,
+        "quality_gates_passed": not quality_gate_failures,
+        "quality_gate_failures": quality_gate_failures,
         "cases": reports,
     }
 
