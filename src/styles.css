@@ -203,7 +203,10 @@ body.is-resizing-columns,body.is-resizing-columns * { cursor:col-resize!importan
 .answer-diagnostic-details { margin:12px 0 0; }.answer-diagnostic-details>div { min-height:28px; display:grid; grid-template-columns:94px minmax(0,1fr); align-items:start; gap:10px; padding:6px 2px; border-top:1px solid var(--border); font-size:10.5px; line-height:1.5; }
 .answer-diagnostic-details dt { color:var(--muted); }.answer-diagnostic-details dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--text-soft); }
 .answer-diagnostics>p { margin:8px 0 0; display:flex; align-items:center; gap:6px; color:var(--muted); font-size:9.5px; }
-.generation-status { min-height:34px; display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; }
+.generation-status { min-height:34px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+.generation-status>svg { flex:0 0 auto; }
+.generation-status button { min-height:26px; padding:0 7px; border:0; border-radius:7px; display:flex; align-items:center; gap:5px; color:var(--text-soft); background:var(--hover); cursor:pointer; font-size:11px; }
+.generation-status button:hover { color:var(--text); background:var(--active); }
 .suggestions-block { padding-top:17px; }
 .suggestions-block>span { display:block; margin-bottom:10px; color:var(--muted); font-size:12px; }
 .suggestions-row { display:flex; gap:8px; flex-wrap:wrap; }

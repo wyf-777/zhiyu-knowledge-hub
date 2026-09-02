@@ -132,6 +132,8 @@ POST /api/v1/storage/backups/open-folder
 
 诊断字段只描述运行阶段和计数，不包含用户问题、对话历史、检索片段或文档内容。前端默认收起显示，当前阶段不持久化到 SQLite。
 
+前端必须在收到 `retrieval.completed` 与后续 `citation` 事件时立即更新正在生成的消息和来源面板，不等待 `message.completed`；提前展示引用只改善等待体验，不绕过最终回答的引用合法性校验。
+
 ### 4.7 检索
 
 ```text

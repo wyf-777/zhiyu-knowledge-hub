@@ -9,6 +9,13 @@ export interface LocalStreamResult {
   performance: AnswerPerformance;
 }
 
+export interface LocalStreamProgress {
+  phase: 'preparing' | 'sources-ready' | 'generating';
+  citations: Citation[];
+  sourceCount: number;
+  noEvidence: boolean;
+}
+
 interface StreamEvent {
   event: string;
   delta?: string;
@@ -43,6 +50,8 @@ interface StreamEvent {
     citation_count?: number;
     visible_character_count?: number;
   };
+  count?: number;
+  latency_ms?: number;
   citation?: {
     id: number;
     chunk_id: string;
@@ -99,6 +108,7 @@ class LocalChatService {
     conversationId: string | null,
     signal: AbortSignal,
     onChunk: (chunk: string) => void,
+    onProgress?: (progress: LocalStreamProgress) => void,
   ): Promise<LocalStreamResult> {
     if (runtimeStatus.phase !== 'running' || !runtimeStatus.baseUrl || !runtimeStatus.token) {
       throw new Error('本地知识库服务尚未就绪。');
@@ -134,6 +144,8 @@ class LocalChatService {
     let startDiagnostics: NonNullable<StreamEvent['diagnostics']> = {};
     let completionDiagnostics: NonNullable<StreamEvent['diagnostics']> = {};
     let completed = false;
+    let sourceCount = 0;
+    let generationStarted = false;
     let buffer = '';
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
@@ -145,9 +157,24 @@ class LocalChatService {
         if (event.provider) provider = event.provider;
         startTimings = event.timings_ms ?? {};
         startDiagnostics = event.diagnostics ?? {};
+        onProgress?.({ phase: 'preparing', citations: [...citations], sourceCount, noEvidence });
       }
-      if (event.event === 'citation' && event.citation) citations.push(toCitation(event.citation));
-      if (event.event === 'message.delta' && event.delta) onChunk(event.delta);
+      if (event.event === 'retrieval.completed') {
+        sourceCount = event.count ?? 0;
+        noEvidence = Boolean(event.no_evidence);
+        onProgress?.({ phase: 'sources-ready', citations: [...citations], sourceCount, noEvidence });
+      }
+      if (event.event === 'citation' && event.citation) {
+        citations.push(toCitation(event.citation));
+        onProgress?.({ phase: 'sources-ready', citations: [...citations], sourceCount: Math.max(sourceCount, citations.length), noEvidence });
+      }
+      if (event.event === 'message.delta' && event.delta) {
+        if (!generationStarted) {
+          generationStarted = true;
+          onProgress?.({ phase: 'generating', citations: [...citations], sourceCount: Math.max(sourceCount, citations.length), noEvidence });
+        }
+        onChunk(event.delta);
+      }
       if (event.event === 'message.completed') {
         suggestions = event.suggestions ?? [];
         noEvidence = Boolean(event.no_evidence);

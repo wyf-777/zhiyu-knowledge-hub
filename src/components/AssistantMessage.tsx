@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, LoaderCircle, Sparkles, Square } from 'lucide-react';
+import { BookOpen, Box, LoaderCircle, Sparkles, Square } from 'lucide-react';
 import type { ChatMessage } from '../types';
 import { AnswerActions } from './AnswerActions';
 import { AnswerDiagnostics } from './AnswerDiagnostics';
@@ -54,7 +54,21 @@ export function AssistantMessage({ message, onOpenCitation, onCopy, onRegenerate
           return <p key={index}>{renderParagraph(block, message.citations, onOpenCitation)}</p>;
         })}
       </div>
-      {message.status === 'streaming' && <div className="generation-status"><LoaderCircle size={15} className="spin" />正在检索知识库并生成回答…</div>}
+      {message.status === 'streaming' && (
+        <div className="generation-status">
+          <LoaderCircle size={15} className="spin" />
+          {message.streamPhase === 'sources-ready' && (message.retrievalSourceCount ?? 0) > 0
+            ? '检索完成，正在生成并校验回答…'
+            : message.streamPhase === 'generating'
+              ? '正在生成并校验回答…'
+              : '正在检索知识库…'}
+          {!!message.citations?.length && (
+            <button onClick={() => onOpenCitation(message.citations![0].id)}>
+              <BookOpen size={13} />已找到 {message.retrievalSourceCount ?? message.citations.length} 条依据
+            </button>
+          )}
+        </div>
+      )}
       {message.status === 'stopped' && <div className="generation-status"><Square size={13} />已停止生成</div>}
       {message.status !== 'streaming' && (
         <AnswerActions

@@ -359,7 +359,7 @@ export default function App() {
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content: question, time, status: 'complete' };
     const assistantId = `assistant-${Date.now()}`;
-    const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '', time, status: 'streaming' };
+    const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '', time, status: 'streaming', streamPhase: 'preparing' };
     let historySource = messages.filter((message) => message.content.trim() && message.status !== 'error' && message.status !== 'streaming');
     if (!appendUserMessage) {
       let lastUserIndex = -1;
@@ -400,6 +400,13 @@ export default function App() {
       const result = desktopRuntime
         ? await localChatService.streamAnswer(question, selectedKnowledgeBaseId, runtimeStatus, selectedDocumentIds, history, conversationId, controller.signal, (chunk) => {
           setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + chunk } : message));
+        }, (progress) => {
+          setMessages((current) => current.map((message) => message.id === assistantId ? {
+            ...message,
+            citations: progress.citations,
+            streamPhase: progress.phase,
+            retrievalSourceCount: progress.sourceCount,
+          } : message));
         })
         : await mockChatService.streamAnswer(question, controller.signal, (chunk) => {
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content + chunk } : message));

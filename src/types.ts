@@ -79,6 +79,8 @@ export interface ChatMessage {
   status?: 'complete' | 'streaming' | 'stopped' | 'no-evidence' | 'error';
   feedback?: 'helpful' | 'unhelpful';
   performance?: AnswerPerformance;
+  streamPhase?: 'preparing' | 'sources-ready' | 'generating';
+  retrievalSourceCount?: number;
 }
 
 export type TaskStepStatus = 'waiting' | 'running' | 'success' | 'failed';
