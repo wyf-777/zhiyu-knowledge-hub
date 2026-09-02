@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal, Protocol
 
 from .embeddings import text_features
+from .query_normalization import normalize_query_semantics
 
 RerankerProviderName = Literal["off", "feature"]
 
@@ -108,15 +109,13 @@ _SEMANTIC_ALIASES = (
     ("几天内", "工作日内"),
     ("几天", "工作日"),
     ("有没有", "是否"),
-    ("发工资", "工资发放 发薪日"),
-    ("工资哪天发", "工资发放日期 发薪日"),
     ("虚假报销", "虚假发票 重复报销 违规报销"),
     ("差多少", "差额 标准"),
 )
 
 
 def _feature_tokens(value: str) -> set[str]:
-    normalized = value
+    normalized = normalize_query_semantics(value)
     for source, target in _SEMANTIC_ALIASES:
         normalized = normalized.replace(source, target)
     return set(text_features(normalized))

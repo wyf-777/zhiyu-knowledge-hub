@@ -204,7 +204,14 @@ class DocumentProcessor:
             item["query_coverage"] = round(coverage, 4)
             item["score"] = round(best_rerank * 0.55 + fusion_score * 0.35 + coverage * 0.10, 4)
             ranked.append(item)
-        ranked.sort(key=lambda item: (float(item["score"]), float(item.get("evidence_score", 0.0))), reverse=True)
+        # Expansion queries may improve recall, but only the original user
+        # intent is allowed to decide final relevance and evidence safety.
+        ranked = self.reranker.rerank(normalized_queries[0], ranked, len(ranked))
+        ranked.sort(key=lambda item: (float(item["rerank_score"]), float(item.get("evidence_score", 0.0))), reverse=True)
+        reranked_by_parent = {
+            str(item.get("parent_chunk_id") or item["chunk_id"]): item
+            for item in ranked
+        }
 
         # Preserve at least one strong result for every answer slot before
         # filling the remaining positions with globally fused candidates.
@@ -215,8 +222,9 @@ class DocumentProcessor:
             if strong is None:
                 continue
             parent_id = str(strong.get("parent_chunk_id") or strong["chunk_id"])
-            if parent_id not in seen:
-                selected.append(fused[parent_id])
+            grounded = reranked_by_parent.get(parent_id)
+            if parent_id not in seen and grounded is not None and float(grounded.get("evidence_score", 0.0)) >= 0.45:
+                selected.append(grounded)
                 seen.add(parent_id)
         for item in ranked:
             parent_id = str(item.get("parent_chunk_id") or item["chunk_id"])

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from knowledge_api.retrieval_planning import alternate_questions, build_retrieval_queries
 
 
@@ -32,10 +34,22 @@ def test_no_evidence_suggestions_are_clickable_questions_not_ui_templates() -> N
     assert "查看已上传文档" not in suggestions
 
 
-def test_salary_date_paraphrase_adds_policy_vocabulary() -> None:
-    queries = build_retrieval_queries("工资哪天发？")
+@pytest.mark.parametrize(
+    "question",
+    ["工资哪天发？", "什么时候发工资？", "工资什么时候发？", "发薪日期是什么时候？"],
+)
+def test_payment_time_grammar_normalization_handles_word_order(question: str) -> None:
+    queries = build_retrieval_queries(question)
 
-    assert any("发薪日" in query and "工资发放日期" in query for query in queries)
+    assert queries[0] == question.rstrip("？")
+    assert any("时间" in query and "日期" in query and "发薪日" in query for query in queries[1:])
+
+
+@pytest.mark.parametrize("subject", ["离职后工资", "奖金", "加班费", "报销款"])
+def test_payment_time_normalization_preserves_the_asked_subject(subject: str) -> None:
+    queries = build_retrieval_queries(f"{subject}什么时候发？")
+
+    assert all(subject in query for query in queries)
 
 
 def test_half_year_leave_question_adds_eligibility_bracket_vocabulary() -> None:

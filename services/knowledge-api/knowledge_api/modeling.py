@@ -71,6 +71,15 @@ class QueryContextPlan:
     use_answer_history: bool
 
 
+@dataclass(frozen=True)
+class QueryExpansionProposal:
+    """Local model proposal; callers still apply semantic and constraint guards."""
+
+    queries: tuple[str, ...]
+    must_keep: tuple[str, ...]
+    provider: str
+
+
 def _prediction_budget(question: str) -> int:
     length = len(question.strip())
     if re.search(r"所有|全部|完整|逐一|罗列|列出|比较|分别", question):
@@ -401,6 +410,96 @@ class ModelManager:
         """Compatibility wrapper returning the safe standalone question."""
 
         return (await self.plan_query(question, history)).standalone_question
+
+    async def propose_query_expansion(
+        self,
+        question: str,
+        candidates: list[dict[str, Any]],
+    ) -> QueryExpansionProposal:
+        """Ask the configured local model for equivalent retrieval wording.
+
+        This is intentionally used only after a recoverable low-confidence
+        first pass. The proposal never replaces the original query and is
+        validated by the retrieval layer before it can affect ranking.
+        """
+
+        settings = self.get_settings()
+        status = await self.status()
+        if status.state != "ready":
+            return QueryExpansionProposal((), (), "unavailable")
+        candidate_context = "\n".join(
+            f"- {str(item.get('document_name') or '')[:80]} / {str(item.get('heading') or '')[:80]}："
+            f"{str(item.get('content') or '')[:140]}"
+            for item in candidates[:2]
+        )
+        prompt = (
+            "你是本地知识库的查询改写器。只生成与原问题语义等价的检索问法，不回答问题。"
+            "必须保留对象、身份、状态、时间、金额、否定词、编号等所有限定条件；不得把离职工资改成普通工资，"
+            "不得把奖金或加班费改成工资。参考候选只用于采用资料中的术语，不能改变用户意图。"
+            "返回严格 JSON：{\"must_keep\":[\"原问题中必须原样保留的短词\"],"
+            "\"queries\":[\"等义问法1\",\"等义问法2\"]}。最多 3 条，每条不超过 80 字。\n\n"
+            f"原问题：{question}\n候选资料术语：\n{candidate_context or '无'}"
+        )
+        provider = "ollama" if settings.provider == "auto" else settings.provider
+        try:
+            async with self._client(min(float(settings.timeout_seconds), 35.0)) as client:
+                if provider == "ollama":
+                    options: dict[str, object] = {"temperature": 0, "num_predict": 120}
+                    if self._force_cpu:
+                        options["num_gpu"] = 0
+                    payload = {
+                        "model": settings.model,
+                        "stream": False,
+                        "think": False,
+                        "keep_alive": "15m",
+                        "format": "json",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "options": options,
+                    }
+                    response = await client.post(f"{settings.base_url}/api/chat", json=payload)
+                    if response.status_code >= 400:
+                        error_text = response.text.lower()
+                        cuda_incompatible = response.status_code == 500 and (
+                            "cuda error" in error_text or "unsupported toolchain" in error_text
+                        )
+                        if self._force_cpu or not cuda_incompatible:
+                            response.raise_for_status()
+                        self._force_cpu = True
+                        payload["options"] = {**options, "num_gpu": 0}
+                        response = await client.post(f"{settings.base_url}/api/chat", json=payload)
+                    response.raise_for_status()
+                    raw = str(response.json().get("message", {}).get("content", "")).strip()
+                else:
+                    response = await client.post(
+                        f"{settings.base_url}/v1/chat/completions",
+                        json={
+                            "model": settings.model,
+                            "stream": False,
+                            "temperature": 0,
+                            "max_tokens": 220,
+                            "response_format": {"type": "json_object"},
+                            "messages": [{"role": "user", "content": prompt}],
+                        },
+                    )
+                    response.raise_for_status()
+                    raw = str(response.json()["choices"][0]["message"]["content"]).strip()
+            object_match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not object_match:
+                return QueryExpansionProposal((), (), provider)
+            payload = json.loads(object_match.group(0))
+            queries = tuple(
+                str(item).strip()
+                for item in payload.get("queries", [])[:3]
+                if isinstance(item, str) and str(item).strip()
+            )
+            must_keep = tuple(
+                str(item).strip()
+                for item in payload.get("must_keep", [])[:8]
+                if isinstance(item, str) and str(item).strip()
+            )
+            return QueryExpansionProposal(queries, must_keep, provider)
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError):
+            return QueryExpansionProposal((), (), provider)
 
     def _answer_prompts(
         self,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .query_normalization import normalize_query_semantics
+
 MAX_RETRIEVAL_QUERIES = 5
 
 _QUESTION_WORDS = re.compile(
@@ -18,9 +20,6 @@ _QUERY_ALIASES = (
     ("补偿", "经济补偿"),
     ("找谁开通", "开通联系人 负责部门 联系方式"),
     ("电脑配置", "电脑配置标准 显示器"),
-    ("发工资", "工资发放日期 发薪日 每月几号"),
-    ("工资哪天发", "工资发放日期 发薪日 每月几号"),
-    ("什么时候发工资", "工资发放日期 发薪日 每月几号"),
     ("入职半年", "入职未满1年 连续工作满1年 年假 享受条件"),
     ("虚假报销", "虚假报销 虚假发票 重复报销 拆票 私人消费冒充公务 处理"),
     ("通讯补贴", "通讯补贴 补贴标准 职级 差额"),
@@ -61,6 +60,10 @@ def build_retrieval_queries(question: str) -> list[str]:
     if not original:
         return []
     queries = [original]
+
+    semantic_query = normalize_query_semantics(original)
+    if semantic_query != original:
+        _append_unique(queries, semantic_query)
 
     # Narrow typo recovery for a frequent Chinese IME confusion. Keep the
     # original query and add the corrected wording as a second retrieval route

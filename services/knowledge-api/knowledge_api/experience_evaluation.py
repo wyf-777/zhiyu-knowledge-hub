@@ -11,11 +11,11 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from .adaptive_retrieval import AdaptiveRetriever
 from .embeddings import EmbeddingManager, EmbeddingProviderName
 from .ingestion import DocumentProcessor
 from .modeling import ModelManager, query_context_needs_similarity
 from .reranking import RerankerManager
-from .retrieval_planning import build_retrieval_queries
 from .storage import KnowledgeStore
 
 ExperienceMode = Literal["retrieval", "answer", "all"]
@@ -129,17 +129,6 @@ def _matching_provider(database_path: Path, requested: EmbeddingProviderName) ->
     if any(model_id.startswith("ollama:") for model_id in model_ids):
         return "ollama"
     return "hashing"
-
-
-def _retrieval_queries(roots: tuple[str, ...]) -> list[str]:
-    queries: list[str] = []
-    for root in roots:
-        for query in build_retrieval_queries(root):
-            if query not in queries:
-                queries.append(query)
-            if len(queries) >= 5:
-                return queries
-    return queries
 
 
 def _constraint_is_present(query: str, alternatives: object) -> bool:
@@ -256,6 +245,7 @@ async def run_experience_evaluation(
     reranker = RerankerManager("feature")
     processor = DocumentProcessor(store, embeddings, reranker)
     model_manager = ModelManager(data_dir)
+    adaptive_retriever = AdaptiveRetriever(processor, embeddings, model_manager)
     knowledge_base_id = str(manifest.get("knowledge_base_id") or "enterprise")
     defaults = manifest.get("default_constraints") if isinstance(manifest.get("default_constraints"), dict) else {}
     reports: list[dict[str, Any]] = []
@@ -282,8 +272,9 @@ async def run_experience_evaluation(
             if previous:
                 topic_similarity = embeddings.similarity(query, previous)
         plan = await model_manager.plan_query(query, history, topic_similarity=topic_similarity)
-        queries = _retrieval_queries(plan.retrieval_questions)
-        results = processor.search_many(queries, [knowledge_base_id], 12)
+        retrieval_outcome = await adaptive_retriever.retrieve(plan, [knowledge_base_id], limit=12)
+        queries = list(retrieval_outcome.queries)
+        results = retrieval_outcome.results
         returned_sources = list(dict.fromkeys(str(item["document_name"]) for item in results))
         failures: list[str] = []
         drift_reasons: list[str] = []
@@ -391,6 +382,7 @@ async def run_experience_evaluation(
             "citation_sources": citation_sources,
             "answer_chars": answer_chars,
             "latency_ms": round((time.perf_counter() - case_started_at) * 1000),
+            "retrieval_diagnostics": retrieval_outcome.diagnostics(),
         }
         if include_answers and mode in {"answer", "all"}:
             case_report["answer"] = content
@@ -398,7 +390,11 @@ async def run_experience_evaluation(
 
     passed = sum(bool(item["passed"]) for item in reports)
     expression_metrics = build_expression_metrics(reports)
-    quality_gates = manifest.get("quality_gates") if isinstance(manifest.get("quality_gates"), dict) else {}
+    quality_gates = (
+        manifest.get("quality_gates")
+        if case_ids is None and isinstance(manifest.get("quality_gates"), dict)
+        else {}
+    )
     quality_gate_failures = evaluate_quality_gates(expression_metrics, quality_gates)
     return {
         "manifest_version": manifest.get("version", "unknown"),

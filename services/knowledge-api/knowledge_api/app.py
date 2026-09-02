@@ -19,10 +19,10 @@ import httpx
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__
+from .adaptive_retrieval import AdaptiveRetriever
 from .data_reliability import BackupManager, BackupValidationError
 from .embeddings import EmbeddingManager, EmbeddingProviderName
 from .ingestion import DocumentProcessor
-from .retrieval_planning import build_retrieval_queries
 from .local_files import open_local_document
 from .modeling import ModelManager, ModelProvider, ModelSettings, query_context_needs_similarity
 from .reranking import RerankerManager, RerankerProviderName
@@ -137,6 +137,7 @@ def create_app(
     reranker_manager = RerankerManager(default_reranker_provider)
     processor = DocumentProcessor(store, embedding_manager, reranker_manager)
     model_manager = ModelManager(store.data_dir, default_provider=default_model_provider, transport=model_transport)
+    adaptive_retriever = AdaptiveRetriever(processor, embedding_manager, model_manager)
     app = FastAPI(title="Zhiyu Knowledge API", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime_token = runtime_token
     app.state.store = store
@@ -145,6 +146,7 @@ def create_app(
     app.state.embedding_manager = embedding_manager
     app.state.reranker_manager = reranker_manager
     app.state.model_manager = model_manager
+    app.state.adaptive_retriever = adaptive_retriever
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -553,16 +555,14 @@ def create_app(
             topic_similarity=topic_similarity,
         )
         planning_completed_at = time.perf_counter()
-        retrieval_queries: list[str] = []
-        for root_query in query_plan.retrieval_questions:
-            for planned_query in build_retrieval_queries(root_query):
-                if planned_query not in retrieval_queries:
-                    retrieval_queries.append(planned_query)
-                if len(retrieval_queries) >= 5:
-                    break
-            if len(retrieval_queries) >= 5:
-                break
-        search_results = await run_in_threadpool(processor.search_many, retrieval_queries, payload.knowledge_base_ids, 12, payload.document_ids)
+        retrieval_outcome = await adaptive_retriever.retrieve(
+            query_plan,
+            payload.knowledge_base_ids,
+            limit=12,
+            document_ids=payload.document_ids,
+        )
+        retrieval_queries = list(retrieval_outcome.queries)
+        search_results = retrieval_outcome.results
         retrieval_completed_at = time.perf_counter()
         # Use the standalone question for both retrieval and answer grounding.
         # Otherwise a follow-up such as “是哪16座” retrieves the right table but
@@ -597,6 +597,7 @@ def create_app(
                     "retrieval_candidate_count": len(search_results),
                     "embedding_execution_mode": embedding_status.execution_mode,
                     "embedding_model": embedding_status.model_id,
+                    **retrieval_outcome.diagnostics(),
                 },
             )
             yield event(

@@ -258,6 +258,70 @@ async def test_low_similarity_uncertain_turn_is_isolated_without_rewrite(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_low_confidence_query_expansion_returns_structured_local_proposal(tmp_path) -> None:
+    payloads: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        return httpx.Response(200, json={"message": {"content": json.dumps({
+            "must_keep": ["工资"],
+            "queries": ["工资发放日期是什么时候", "每月工资发薪日"],
+        }, ensure_ascii=False)}})
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    proposal = await manager.propose_query_expansion(
+        "工资什么时候发？",
+        [{"document_name": "薪酬制度.md", "heading": "发薪日", "content": "工资发放日期按制度执行。"}],
+    )
+
+    assert proposal.queries == ("工资发放日期是什么时候", "每月工资发薪日")
+    assert proposal.must_keep == ("工资",)
+    assert payloads[0]["stream"] is False
+    assert payloads[0]["think"] is False
+    assert payloads[0]["format"] == "json"
+
+
+@pytest.mark.anyio
+async def test_query_expansion_fails_closed_when_model_returns_non_json(tmp_path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        return httpx.Response(200, json={"message": {"content": "工资每月十五日发放"}})
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    proposal = await manager.propose_query_expansion("工资什么时候发？", [])
+
+    assert proposal.queries == ()
+
+
+@pytest.mark.anyio
+async def test_query_expansion_retries_on_cpu_for_incompatible_cuda(tmp_path) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]})
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if payload.get("options", {}).get("num_gpu") != 0:
+            return httpx.Response(500, json={"error": "CUDA error: unsupported toolchain"})
+        return httpx.Response(200, json={"message": {"content": json.dumps({
+            "must_keep": ["工资"],
+            "queries": ["工资发放日期"],
+        }, ensure_ascii=False)}})
+
+    manager = ModelManager(tmp_path, transport=httpx.MockTransport(handler))
+    proposal = await manager.propose_query_expansion("工资什么时候发？", [])
+
+    assert proposal.queries == ("工资发放日期",)
+    assert "num_gpu" not in calls[0]["options"]
+    assert calls[1]["options"]["num_gpu"] == 0
+
+
+@pytest.mark.anyio
 async def test_ollama_answer_is_forwarded_as_native_stream(tmp_path) -> None:
     payloads: list[dict[str, object]] = []
 
