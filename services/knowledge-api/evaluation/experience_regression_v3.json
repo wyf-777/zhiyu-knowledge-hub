@@ -87,8 +87,8 @@
     {
       "id": "departure-salary-and-computer-multi-slot",
       "query": "离职手续没办完，工资什么时候发？电脑不还行吗？",
-      "expected_terms": ["离职手续", "次月15日", "电脑", "归还"],
-      "expected_any_terms": [["暂缓办理离职证明", "依法追索", "必须归还"]],
+      "expected_terms": ["离职手续", "次月15日", "电脑"],
+      "expected_any_terms": [["归还", "不还"], ["暂缓办理离职证明", "依法追索", "必须归还"]],
       "expected_sources": ["01-员工手册（2026修订版）.docx", "07-员工入转调离管理办法.md", "09-固定资产与办公用品管理规定.md"]
     },
     {

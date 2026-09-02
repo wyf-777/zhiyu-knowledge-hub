@@ -55,6 +55,7 @@ def test_expression_metrics_detect_source_instability_and_query_drift() -> None:
             "paraphrase_group_id": "salary-date",
             "variant_kind": "equivalent",
             "retrieval_passed": True,
+            "answer_passed": True,
             "matched_expected_sources": ["salary.md", "handbook.docx"],
             "query_drift": False,
         },
@@ -62,6 +63,7 @@ def test_expression_metrics_detect_source_instability_and_query_drift() -> None:
             "paraphrase_group_id": "salary-date",
             "variant_kind": "equivalent",
             "retrieval_passed": False,
+            "answer_passed": False,
             "matched_expected_sources": ["salary.md"],
             "query_drift": False,
         },
@@ -69,6 +71,7 @@ def test_expression_metrics_detect_source_instability_and_query_drift() -> None:
             "paraphrase_group_id": "salary-date",
             "variant_kind": "contrast",
             "retrieval_passed": False,
+            "answer_passed": False,
             "matched_expected_sources": [],
             "query_drift": True,
         },
@@ -79,6 +82,8 @@ def test_expression_metrics_detect_source_instability_and_query_drift() -> None:
         "min_expression_consistency_rate": 1.0,
         "min_source_consistency_rate": 0.8,
         "min_contrast_accuracy_rate": 1.0,
+        "min_answer_consistency_rate": 1.0,
+        "min_contrast_answer_accuracy_rate": 1.0,
         "max_query_drift_rate": 0.0,
     })
 
@@ -86,7 +91,9 @@ def test_expression_metrics_detect_source_instability_and_query_drift() -> None:
     assert metrics["source_consistency_rate"] == 0.5
     assert metrics["query_drift_rate"] == pytest.approx(1 / 3, abs=0.0001)
     assert metrics["contrast_accuracy_rate"] == 0.0
-    assert len(failures) == 4
+    assert metrics["answer_consistency_rate"] == 0.5
+    assert metrics["contrast_answer_accuracy_rate"] == 0.0
+    assert len(failures) == 6
 
 
 def test_expression_group_requires_explicit_variant_kind() -> None:

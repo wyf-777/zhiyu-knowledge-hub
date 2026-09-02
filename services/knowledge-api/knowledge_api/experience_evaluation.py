@@ -164,6 +164,8 @@ def build_expression_metrics(reports: list[dict[str, Any]]) -> dict[str, Any]:
         report for items in grouped.values() for report in items
         if report.get("variant_kind") == "contrast"
     ]
+    answered_equivalents = [item for item in equivalent_cases if item.get("answer_passed") is not None]
+    answered_contrasts = [item for item in contrast_cases if item.get("answer_passed") is not None]
     source_scores: list[float] = []
     group_reports: list[dict[str, Any]] = []
     for group_id, items in grouped.items():
@@ -178,6 +180,15 @@ def build_expression_metrics(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "contrast_count": len(items) - len(equivalents),
             "expression_consistency_rate": round(
                 sum(bool(item.get("retrieval_passed")) for item in equivalents) / max(1, len(equivalents)), 4
+            ),
+            "answer_consistency_rate": (
+                round(
+                    sum(bool(item.get("answer_passed")) for item in equivalents if item.get("answer_passed") is not None)
+                    / len([item for item in equivalents if item.get("answer_passed") is not None]),
+                    4,
+                )
+                if any(item.get("answer_passed") is not None for item in equivalents)
+                else None
             ),
             "source_consistency_rate": round(source_consistency, 4),
             "query_drift_count": sum(bool(item.get("query_drift")) for item in items),
@@ -199,6 +210,14 @@ def build_expression_metrics(reports: list[dict[str, Any]]) -> dict[str, Any]:
         "contrast_accuracy_rate": round(
             sum(bool(item.get("retrieval_passed")) for item in contrast_cases) / max(1, len(contrast_cases)), 4
         ),
+        "answer_consistency_rate": (
+            round(sum(bool(item.get("answer_passed")) for item in answered_equivalents) / len(answered_equivalents), 4)
+            if answered_equivalents else None
+        ),
+        "contrast_answer_accuracy_rate": (
+            round(sum(bool(item.get("answer_passed")) for item in answered_contrasts) / len(answered_contrasts), 4)
+            if answered_contrasts else None
+        ),
         "groups": group_reports,
     }
 
@@ -208,6 +227,8 @@ def evaluate_quality_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> li
         "min_expression_consistency_rate": ("expression_consistency_rate", "表达一致率", "min"),
         "min_source_consistency_rate": ("source_consistency_rate", "来源一致率", "min"),
         "min_contrast_accuracy_rate": ("contrast_accuracy_rate", "意义变化反例准确率", "min"),
+        "min_answer_consistency_rate": ("answer_consistency_rate", "同义问法回答一致率", "min"),
+        "min_contrast_answer_accuracy_rate": ("contrast_answer_accuracy_rate", "意义变化反例回答准确率", "min"),
         "max_query_drift_rate": ("query_drift_rate", "查询漂移率", "max"),
     }
     failures: list[str] = []
@@ -215,7 +236,10 @@ def evaluate_quality_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> li
         if gate_name not in gates:
             continue
         expected = float(gates[gate_name])
-        actual = float(metrics.get(metric_name, 0.0))
+        metric_value = metrics.get(metric_name)
+        if metric_value is None:
+            continue
+        actual = float(metric_value)
         failed = actual < expected if direction == "min" else actual > expected
         if failed:
             operator = ">=" if direction == "min" else "<="
@@ -330,6 +354,7 @@ async def run_experience_evaluation(
         provider = "not-run"
         citation_sources: list[str] = []
         answer_chars = 0
+        answer_passed: bool | None = None
         if mode in {"answer", "all"}:
             answer = await model_manager.stream(
                 plan.standalone_question,
@@ -361,12 +386,14 @@ async def run_experience_evaluation(
             max_answer_chars = int(constraints.get("max_answer_chars") or 0)
             if max_answer_chars and len(content) > max_answer_chars:
                 failures.append(f"答案过长：{len(content)} > {max_answer_chars}")
+            answer_passed = not failures
 
         case_report = {
             "id": str(case["id"]),
             "query": query,
             "passed": not failures,
             "retrieval_passed": retrieval_passed,
+            "answer_passed": answer_passed,
             "failures": failures,
             "paraphrase_group_id": case.get("paraphrase_group_id"),
             "variant_kind": case.get("variant_kind"),

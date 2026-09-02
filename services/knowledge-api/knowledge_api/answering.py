@@ -339,6 +339,11 @@ def _expense_cap_answer(question: str, evidence: list[dict[str, Any]]) -> str | 
         for index, item in enumerate(evidence, start=1)
         for unit in _evidence_units(item)
     ]
+    roles = (
+        "试用期员工", "部门负责人", "普通员工", "正式员工", "实习生", "外包人员",
+        "董事长", "副总经理", "总经理", "总监", "经理", "主管", "员工",
+    )
+    role = next((item for item in roles if item in question), None)
     category: str | None = None
     category_index: int | None = None
     category_pattern = re.compile(r"(?:新一线|一线|二线及以下|二线|三线及以下|三线|其他)(?:城市)?")
@@ -347,25 +352,29 @@ def _expense_cap_answer(question: str, evidence: list[dict[str, Any]]) -> str | 
         if not category_match:
             continue
         cells = [cell.strip() for cell in re.split(r"[/、，,；;]", unit) if cell.strip()]
-        if any(len(cell) >= 2 and cell in question for cell in cells if cell not in {"一线", "新一线", "二线", "二线及以下"}):
+        place_tokens = [
+            match.group(0)
+            for cell in cells
+            if (match := re.match(r"[\u3400-\u9fff]{2,8}", cell))
+            and match.group(0) not in roles
+            and not category_pattern.fullmatch(match.group(0))
+        ]
+        if any(token in question for token in place_tokens):
             category = category_match.group(0)
             category_index = index
             break
-
-    roles = (
-        "试用期员工", "部门负责人", "普通员工", "正式员工", "实习生", "外包人员",
-        "董事长", "副总经理", "总经理", "总监", "经理", "主管", "员工",
-    )
-    role = next((item for item in roles if item in question), None)
     if not category or not role:
         return None
 
     cap: float | None = None
     cap_index: int | None = None
     for index, unit in indexed_units:
-        amounts = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)\s*元", unit)]
-        if category in unit and role in unit and amounts:
-            cap = amounts[0]
+        role_amount = re.search(
+            rf"{re.escape(role)}[^。；，,|]{{0,28}}?(\d+(?:\.\d+)?)\s*元",
+            unit,
+        )
+        if category in unit and role_amount:
+            cap = float(role_amount.group(1))
             cap_index = index
             break
     if cap is None:

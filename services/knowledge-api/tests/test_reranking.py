@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from knowledge_api.reranking import RerankerManager, extract_anchors, required_query_anchors
+from knowledge_api.reranking import RerankerManager, explicit_query_constraints, extract_anchors, required_query_anchors
 
 
 def candidate(chunk_id: str, content: str, score: float, *, heading: str = "", document_name: str = "手册.txt") -> dict[str, object]:
@@ -69,3 +69,19 @@ def test_range_lookup_does_not_require_input_value_as_literal_anchor() -> None:
     assert required_query_anchors("经理去深圳住酒店650元/晚能不能报？") == set()
     assert required_query_anchors("迟到20分钟怎么算？") == set()
     assert required_query_anchors("设备编号 ZY-7788 的保留期？") == {"zy-7788"}
+
+
+def test_departure_condition_promotes_matching_salary_rule() -> None:
+    results = RerankerManager("feature").rerank(
+        "离职后工资什么时候发？",
+        [
+            candidate("generic", "发薪日为每月15日，支付上月工资。", 0.78, heading="发薪日"),
+            candidate("departure", "离职当月工资在办理完离职手续后的次月15日发放。", 0.52, heading="离职"),
+        ],
+        2,
+    )
+
+    assert explicit_query_constraints("离职后工资什么时候发？") == {"离职"}
+    assert results[0]["chunk_id"] == "departure"
+    assert results[0]["constraint_coverage"] == 1.0
+    assert results[1]["constraint_coverage"] == 0.0

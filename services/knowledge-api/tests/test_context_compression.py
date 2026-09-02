@@ -343,3 +343,16 @@ def test_expense_cap_binds_city_category_and_role_before_comparison() -> None:
     assert "50 元/晚" in answer
     assert "指定酒店" in answer and "分管副总同意" in answer
     assert "P7-P8" not in answer
+
+
+def test_expense_cap_binds_inline_amount_to_the_named_role() -> None:
+    evidence = [{
+        "content": "一线城市（北京、上海、广州、深圳）普通员工住宿上限450元/晚，经理600元/晚，总监800元/晚。",
+        "parent_content": "一线城市（北京、上海、广州、深圳）普通员工住宿上限450元/晚，经理600元/晚，总监800元/晚。",
+    }]
+
+    answer = fast_factual_answer("经理去深圳住酒店650元/晚能不能报？", evidence)
+
+    assert answer is not None
+    assert "经理在一线城市的住宿上限为 **600 元/晚**" in answer
+    assert "超出的 **50 元/晚**" in answer

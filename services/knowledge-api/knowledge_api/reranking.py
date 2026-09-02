@@ -113,6 +113,18 @@ _SEMANTIC_ALIASES = (
     ("差多少", "差额 标准"),
 )
 
+_EXPLICIT_CONDITION_TERMS = (
+    "离职", "在职", "入职", "试用期", "实习生", "外包人员", "兼职", "退休", "待岗",
+    "未办结", "未归还", "未结清", "旷工", "迟到", "病假", "事假", "年假", "产假",
+    "普通员工", "部门负责人", "经理", "总监", "研发", "销售",
+)
+
+
+def explicit_query_constraints(query: str) -> set[str]:
+    """Extract status/role constraints whose loss can change the answer."""
+
+    return {term for term in _EXPLICIT_CONDITION_TERMS if term in query}
+
 
 def _feature_tokens(value: str) -> set[str]:
     normalized = normalize_query_semantics(value)
@@ -156,6 +168,8 @@ class LocalFeatureReranker:
     def rerank(self, query: str, candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         query_features = _feature_tokens(query)
         query_anchors = required_query_anchors(query)
+        query_constraints = explicit_query_constraints(query)
+        multi_slot = len([part for part in re.split(r"[？?；;]+", query) if part.strip()]) > 1
         ranked: list[dict[str, Any]] = []
         for candidate in candidates:
             item = dict(candidate)
@@ -173,6 +187,16 @@ class LocalFeatureReranker:
                 + title_coverage * 0.06
                 + anchor_coverage * 0.30
             )
+            searchable_text = f"{document_name}\n{heading}\n{content}"
+            constraint_coverage = (
+                len({term for term in query_constraints if term in searchable_text}) / len(query_constraints)
+                if query_constraints else 1.0
+            )
+            if query_constraints:
+                weight = 0.15 if multi_slot else 0.30
+                feature_score = feature_score * (1.0 - weight) + constraint_coverage * weight
+                if not multi_slot and constraint_coverage < 1.0:
+                    feature_score *= max(0.18, constraint_coverage)
             if query_anchors and not query_anchors & candidate_anchors:
                 feature_score *= 0.30
             retrieval_score = max(0.0, min(1.0, float(item.get("score", 0.0))))
@@ -181,6 +205,7 @@ class LocalFeatureReranker:
             item["retrieval_score"] = round(retrieval_score, 4)
             item["rerank_score"] = round(rerank_score, 4)
             item["rerank_feature_score"] = round(feature_score, 4)
+            item["constraint_coverage"] = round(constraint_coverage, 4)
             item["evidence_score"] = round(evidence_score, 4)
             item["reranker_model_id"] = self.model_id
             ranked.append(item)

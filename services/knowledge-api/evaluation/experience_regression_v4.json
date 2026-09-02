@@ -18,6 +18,8 @@
     "min_expression_consistency_rate": 1.0,
     "min_source_consistency_rate": 0.8,
     "min_contrast_accuracy_rate": 1.0,
+    "min_answer_consistency_rate": 1.0,
+    "min_contrast_answer_accuracy_rate": 1.0,
     "max_query_drift_rate": 0.0
   },
   "cases": [
